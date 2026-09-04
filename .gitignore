@@ -1,0 +1,35 @@
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# Variables de entorno / credenciales
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Editor / SO
+.vscode/
+.idea/
+Thumbs.db
+
+# Datos generados por scraping / ETL
+data/raw/
+data/processed/
+
+# Archivos temporales y bases locales
+*.log
+*.sqlite
+*.db
+
+# Builds
+build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies

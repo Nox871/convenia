@@ -1,0 +1,9 @@
+# Se completa automáticamente al correr `flutter create .`.
+# Mientras tanto, ignora los artefactos de build más comunes.
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+android/local.properties
+android/.gradle/
