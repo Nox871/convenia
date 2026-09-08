@@ -52,15 +52,13 @@ class _HomeScreenState extends State<HomeScreen> {
                 style: TextStyle(
                   fontSize: 13,
                   fontStyle: FontStyle.italic,
-                  color: AppColors.slate600,
+                  color: AppColors.inkMuted,
                 ),
               ),
-              const SizedBox(height: AppSpacing.md),
-              const _SupermarketVsIndicator(),
               const SizedBox(height: AppSpacing.xxxl),
-              const Text('Encuentra dónde te conviene comprar', style: AppText.hero),
+              Text('Encuentra dónde te conviene comprar', style: AppText.hero),
               const SizedBox(height: AppSpacing.sm),
-              const Text(
+              Text(
                 'Compara precios de supermercados antes de comprar y ahorra en cada producto.',
                 style: AppText.body,
               ),
@@ -72,7 +70,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: const Text('Buscar'),
               ),
               const SizedBox(height: AppSpacing.sm),
-              const Text(
+              Text(
                 'Ejemplo: leche, arroz, café, huevos...',
                 style: AppText.caption,
               ),
@@ -82,7 +80,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
-                  color: AppColors.slate400,
+                  color: AppColors.inkFaint,
                   letterSpacing: 0.6,
                 ),
               ),
@@ -98,37 +96,6 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
       ),
-    );
-  }
-}
-
-class _SupermarketVsIndicator extends StatelessWidget {
-  const _SupermarketVsIndicator();
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        _dot(AppColors.d1),
-        const SizedBox(width: AppSpacing.xs),
-        const Text('D1', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: AppSpacing.sm),
-          child: Text('vs', style: TextStyle(fontSize: 12, color: AppColors.slate400)),
-        ),
-        _dot(AppColors.exito),
-        const SizedBox(width: AppSpacing.xs),
-        const Text('Éxito', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
-      ],
-    );
-  }
-
-  Widget _dot(Color color) {
-    return Container(
-      width: 8,
-      height: 8,
-      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
     );
   }
 }

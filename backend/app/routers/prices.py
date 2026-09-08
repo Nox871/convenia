@@ -5,7 +5,7 @@ from app.core.database import get_db
 from app.schemas.price import ProductPricesResponse
 from app.services import product_service
 
-router = APIRouter(prefix="/api/products", tags=["prices"])
+router = APIRouter(prefix="/api/v1/products", tags=["prices"])
 
 
 @router.get("/{product_id}/prices", response_model=ProductPricesResponse)

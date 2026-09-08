@@ -1,7 +1,7 @@
 """ETL D1: RAW -> PostgreSQL. Ejecutar con: python -m etl.etl_d1"""
 import logging
 
-from etl.config import RAW_PATHS
+from etl.config import RAW_DIRS
 from etl.core import SupermarketETL
 
 
@@ -10,7 +10,7 @@ def main():
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
-    etl = SupermarketETL(code="D1", raw_path=RAW_PATHS["D1"])
+    etl = SupermarketETL(code="D1", raw_dir=RAW_DIRS["D1"])
     etl.run()
 
 

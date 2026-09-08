@@ -1,17 +1,35 @@
-"""Motor genérico de ETL: RAW (D1 / Éxito) -> PostgreSQL.
+"""Motor genérico de ETL: RAW (D1 / Éxito / Carulla / Jumbo / Olímpica) -> PostgreSQL.
 
-Ambos scrapers producen RAW con la misma forma de producto (product_id, product_name,
-brand, category_id/category, price, list_price, payment_methods, extracted_at, ...),
-así que la lógica de carga se comparte por completo; lo único específico por
-supermercado es el código (`code`) y la ruta del archivo RAW.
+Todos los scrapers producen RAW con la misma forma de producto (product_id,
+product_name, brand, category_id/category, price, list_price,
+payment_methods, extracted_at, ...), así que la lógica de carga se comparte
+por completo; lo único específico por supermercado es el código (`code`) y
+el directorio donde ese conector deja sus snapshots RAW.
+
+Además de cargar productos y precios, este motor:
+- registra cada ejecución en `scraper_runs`,
+- aplica el ciclo de vida de producto: productos vistos quedan/vuelven
+  ACTIVE, los no vistos pasan a TEMPORARILY_UNAVAILABLE y, tras
+  `PRODUCT_DISCONTINUATION_THRESHOLD_DAYS` sin aparecer, a DISCONTINUED,
+- protege contra ejecuciones con muy pocos productos: un RAW
+  sospechosamente pequeño marca el run como FAILED y no toca el ciclo de
+  vida de ningún producto.
 """
 from __future__ import annotations
 
 import json
 import logging
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from psycopg2.extras import Json
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from scraper.core.raw_writer import resolver_ultimo_raw  # noqa: E402
 
 from etl import db
 from etl.common import (
@@ -22,6 +40,10 @@ from etl.common import (
     slugify,
     to_decimal,
 )
+from etl.config import (
+    MIN_PRODUCTS_RATIO_VS_HISTORY,
+    PRODUCT_DISCONTINUATION_THRESHOLD_DAYS,
+)
 
 logger = logging.getLogger("etl")
 
@@ -31,25 +53,25 @@ class RawValidationError(Exception):
 
 
 class SupermarketETL:
-    def __init__(self, code: str, raw_path: Path):
+    def __init__(self, code: str, raw_dir: Path):
         self.code = code
-        self.raw_path = Path(raw_path)
+        self.raw_dir = Path(raw_dir)
         self.stats = ETLStats()
         self._category_cache: dict[str, int] = {}
+        self.run_id: int | None = None
 
     # ------------------------------------------------------------------ #
     # Carga y validación del RAW
     # ------------------------------------------------------------------ #
-    def _load_raw(self) -> dict:
-        if not self.raw_path.exists():
-            raise RawValidationError(f"No existe el archivo RAW: {self.raw_path}")
+    def _load_raw(self) -> tuple[dict, Path]:
+        raw_path = resolver_ultimo_raw(self.raw_dir, self.code)
 
-        with open(self.raw_path, "r", encoding="utf-8") as f:
+        with open(raw_path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
         if not isinstance(data, dict) or "products" not in data:
             raise RawValidationError(
-                f"El RAW de {self.code} no tiene la forma esperada (falta 'products')"
+                f"El RAW de {self.code} ({raw_path}) no tiene la forma esperada (falta 'products')"
             )
         if not isinstance(data["products"], list):
             raise RawValidationError(f"'products' en el RAW de {self.code} no es una lista")
@@ -62,7 +84,7 @@ class SupermarketETL:
                 self.code,
             )
 
-        return data
+        return data, raw_path
 
     def _get_supermarket_id(self, conn) -> int:
         with conn.cursor() as cur:
@@ -73,6 +95,72 @@ class SupermarketETL:
                 f"No existe el supermercado '{self.code}' en la tabla supermarkets"
             )
         return row[0]
+
+    # ------------------------------------------------------------------ #
+    # Ejecuciones (scraper_runs)
+    # ------------------------------------------------------------------ #
+    def _create_run(self, conn, supermarket_id: int, started_at, raw_location: str) -> int:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO scraper_runs (supermarket_id, started_at, status, raw_location)
+                VALUES (%s, %s, 'RUNNING', %s)
+                RETURNING id
+                """,
+                (supermarket_id, started_at, raw_location),
+            )
+            run_id = cur.fetchone()[0]
+        conn.commit()
+        return run_id
+
+    def _average_historical_products(self, conn, supermarket_id: int) -> float | None:
+        """Promedio de products_detected de los últimos 5 runs válidos, usado
+        como referencia para el chequeo de calidad mínima (sección 31)."""
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT AVG(products_detected) FROM (
+                    SELECT products_detected FROM scraper_runs
+                    WHERE supermarket_id = %s
+                      AND status IN ('SUCCESS', 'SUCCESS_WITH_ERRORS')
+                      AND products_detected IS NOT NULL
+                    ORDER BY started_at DESC
+                    LIMIT 5
+                ) recientes
+                """,
+                (supermarket_id,),
+            )
+            (promedio,) = cur.fetchone()
+        return float(promedio) if promedio is not None else None
+
+    def _finish_run(self, conn, run_id: int, status: str, finished_at, **counters) -> None:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE scraper_runs
+                SET finished_at = %s,
+                    status = %s,
+                    products_detected = %s,
+                    categories_detected = %s,
+                    products_new = %s,
+                    products_existing = %s,
+                    products_missing = %s,
+                    errors_count = %s
+                WHERE id = %s
+                """,
+                (
+                    finished_at,
+                    status,
+                    counters.get("products_detected"),
+                    counters.get("categories_detected"),
+                    counters.get("products_new"),
+                    counters.get("products_existing"),
+                    counters.get("products_missing"),
+                    counters.get("errors_count", 0),
+                    run_id,
+                ),
+            )
+        conn.commit()
 
     # ------------------------------------------------------------------ #
     # Categorías
@@ -132,9 +220,9 @@ class SupermarketETL:
                     supermarket_id, source_category_id, external_id, name_raw, brand_raw,
                     brand_external_id, product_reference, product_reference_code, product_url,
                     image_url, release_date, seller_name_raw, seller_external_id,
-                    first_seen_at, last_seen_at, is_active, raw_data
+                    first_seen_at, last_seen_at, status, raw_data
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'ACTIVE', %s
                 )
                 ON CONFLICT (supermarket_id, external_id) DO UPDATE SET
                     source_category_id = EXCLUDED.source_category_id,
@@ -156,7 +244,11 @@ class SupermarketETL:
                         COALESCE(source_products.last_seen_at, EXCLUDED.last_seen_at),
                         COALESCE(EXCLUDED.last_seen_at, source_products.last_seen_at)
                     ),
-                    is_active = TRUE,
+                    -- Ver también, cada producto vuelto a ver queda/vuelve ACTIVE
+                    -- (reactivación incluida) y se reinicia su contador de ausencias.
+                    status = 'ACTIVE',
+                    consecutive_missing_runs = 0,
+                    discontinued_at = NULL,
                     raw_data = EXCLUDED.raw_data
                 RETURNING id, (xmax = 0) AS inserted
                 """,
@@ -184,7 +276,7 @@ class SupermarketETL:
         return source_product_id, inserted
 
     def _insert_price_observation(self, conn, source_product_id: int, product: dict,
-                                   observed_at) -> bool:
+                                   observed_at, run_id: int | None) -> bool:
         price = to_decimal(product.get("price"))
         if price is None:
             raise ValueError("price ausente: no se puede registrar price_observation")
@@ -198,9 +290,9 @@ class SupermarketETL:
                 """
                 INSERT INTO price_observations (
                     source_product_id, price, list_price, currency, available,
-                    observed_at, payment_methods
+                    observed_at, payment_methods, scraper_run_id
                 )
-                SELECT %s, %s, %s, %s, TRUE, %s, %s
+                SELECT %s, %s, %s, %s, TRUE, %s, %s, %s
                 WHERE NOT EXISTS (
                     SELECT 1 FROM price_observations
                     WHERE source_product_id = %s AND observed_at = %s
@@ -214,13 +306,73 @@ class SupermarketETL:
                     currency,
                     observed_at,
                     Json(payment_methods),
+                    run_id,
                     source_product_id,
                     observed_at,
                 ),
             )
             row = cur.fetchone()
 
+        if row is not None:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE source_products SET last_price_at = %s WHERE id = %s",
+                    (observed_at, source_product_id),
+                )
+
         return row is not None
+
+    # ------------------------------------------------------------------ #
+    # Ciclo de vida del producto
+    # ------------------------------------------------------------------ #
+    def _apply_lifecycle(self, conn, supermarket_id: int, external_ids_vistos: list[str]) -> dict:
+        """Marca como ausentes (y, tras el umbral de días, descontinuados) los
+        productos ACTIVE o TEMPORARILY_UNAVAILABLE de este supermercado que NO
+        estén en `external_ids_vistos`.
+
+        Los productos vistos ya quedaron ACTIVE en `_upsert_source_product`
+        (incluida la reactivación de los que estaban DISCONTINUED); esta
+        función sólo se ocupa de los que faltaron en el RAW actual. Incluye
+        TEMPORARILY_UNAVAILABLE (no sólo ACTIVE) a propósito: un producto ya
+        marcado ausente debe seguir acumulando `consecutive_missing_runs` en
+        cada corrida donde sigue sin aparecer, y sólo así puede eventualmente
+        cruzar el umbral de días y pasar a DISCONTINUED -- si sólo se
+        reevaluaran los ACTIVE, un producto ausente quedaría congelado en
+        TEMPORARILY_UNAVAILABLE para siempre tras su primera ausencia.
+        """
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE source_products
+                SET consecutive_missing_runs = consecutive_missing_runs + 1,
+                    status = CASE
+                        WHEN now() - last_seen_at >= (%s || ' days')::interval
+                        THEN 'DISCONTINUED'
+                        ELSE 'TEMPORARILY_UNAVAILABLE'
+                    END,
+                    discontinued_at = CASE
+                        WHEN now() - last_seen_at >= (%s || ' days')::interval
+                        THEN now()
+                        ELSE discontinued_at
+                    END
+                WHERE supermarket_id = %s
+                  AND status IN ('ACTIVE', 'TEMPORARILY_UNAVAILABLE')
+                  AND NOT (external_id = ANY(%s))
+                RETURNING status
+                """,
+                (
+                    PRODUCT_DISCONTINUATION_THRESHOLD_DAYS,
+                    PRODUCT_DISCONTINUATION_THRESHOLD_DAYS,
+                    supermarket_id,
+                    external_ids_vistos,
+                ),
+            )
+            filas = cur.fetchall()
+
+        return {
+            "missing": sum(1 for (status,) in filas if status == "TEMPORARILY_UNAVAILABLE"),
+            "discontinued": sum(1 for (status,) in filas if status == "DISCONTINUED"),
+        }
 
     # ------------------------------------------------------------------ #
     # Orquestación
@@ -252,7 +404,7 @@ class SupermarketETL:
 
         try:
             price_inserted = self._insert_price_observation(
-                conn, source_product_id, product, extracted_at
+                conn, source_product_id, product, extracted_at, self.run_id
             )
             if price_inserted:
                 self.stats.prices_inserted += 1
@@ -268,19 +420,42 @@ class SupermarketETL:
             )
 
     def run(self) -> ETLStats:
-        logger.info("Iniciando ETL %s desde %s", self.code, self.raw_path)
-        data = self._load_raw()
+        logger.info("Iniciando ETL %s desde %s", self.code, self.raw_dir)
+        started_at = datetime.now(timezone.utc)
+        data, raw_path = self._load_raw()
         products = data["products"]
         self.stats.raw_count = len(products)
 
         with db.get_connection() as conn:
             supermarket_id = self._get_supermarket_id(conn)
+            self.run_id = self._create_run(conn, supermarket_id, started_at, str(raw_path))
 
+            # Sección 31: protección contra ejecuciones con muy pocos productos
+            # (scraping roto) — no debe interpretarse como descontinuación masiva.
+            promedio_historico = self._average_historical_products(conn, supermarket_id)
+            if promedio_historico and len(products) < promedio_historico * MIN_PRODUCTS_RATIO_VS_HISTORY:
+                mensaje = (
+                    f"RAW sospechosamente pequeño para {self.code}: {len(products)} productos "
+                    f"vs promedio histórico {promedio_historico:.0f} "
+                    f"(umbral: {MIN_PRODUCTS_RATIO_VS_HISTORY:.0%}). "
+                    "Run marcado FAILED, no se aplica ciclo de vida."
+                )
+                logger.error(mensaje)
+                self._finish_run(
+                    conn, self.run_id, "FAILED", datetime.now(timezone.utc),
+                    products_detected=len(products), errors_count=0,
+                )
+                raise RawValidationError(mensaje)
+
+            external_ids_vistos: list[str] = []
             for product in products:
                 self.stats.processed += 1
                 try:
                     with conn:
                         self._process_product(conn, supermarket_id, product)
+                    external_id = normalize_str(product.get("product_id"))
+                    if external_id:
+                        external_ids_vistos.append(external_id)
                 except Exception as exc:  # noqa: BLE001 - queremos capturar y seguir
                     self.stats.errors += 1
                     self.stats.error_details.append(str(exc))
@@ -290,13 +465,36 @@ class SupermarketETL:
                         exc,
                     )
 
+            with conn:
+                resultado_ciclo_vida = self._apply_lifecycle(
+                    conn, supermarket_id, external_ids_vistos
+                )
+
+            status = "SUCCESS_WITH_ERRORS" if self.stats.errors else "SUCCESS"
+            self._finish_run(
+                conn,
+                self.run_id,
+                status,
+                datetime.now(timezone.utc),
+                products_detected=self.stats.raw_count,
+                categories_detected=self.stats.categories_seen,
+                products_new=self.stats.products_inserted,
+                products_existing=self.stats.products_updated,
+                products_missing=resultado_ciclo_vida["missing"] + resultado_ciclo_vida["discontinued"],
+                errors_count=self.stats.errors,
+            )
+
         self.stats.print_report(self.code)
         logger.info(
-            "ETL %s finalizado: procesados=%s insertados=%s actualizados=%s errores=%s",
+            "ETL %s finalizado (run_id=%s): procesados=%s insertados=%s actualizados=%s "
+            "ausentes=%s descontinuados=%s errores=%s",
             self.code,
+            self.run_id,
             self.stats.processed,
             self.stats.products_inserted,
             self.stats.products_updated,
+            resultado_ciclo_vida["missing"],
+            resultado_ciclo_vida["discontinued"],
             self.stats.errors,
         )
         return self.stats

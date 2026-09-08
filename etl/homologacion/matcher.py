@@ -17,12 +17,15 @@ la marca simplemente no aporta puntaje (ni penaliza) cuando falta.
 from __future__ import annotations
 
 import difflib
+import os
 from dataclasses import dataclass
 
 from .normalize import Cantidad, nombre_base, normalizar_marca, extraer_cantidad
 
-CONFIRM_THRESHOLD = 0.80
-REVIEW_THRESHOLD = 0.55
+# Configurables por variable de entorno para ajustar la sensibilidad del
+# matching sin tocar el resto del módulo de scoring.
+CONFIRM_THRESHOLD = float(os.getenv("MATCH_CONFIRM_THRESHOLD", "0.80"))
+REVIEW_THRESHOLD = float(os.getenv("MATCH_REVIEW_THRESHOLD", "0.55"))
 
 
 @dataclass(frozen=True)

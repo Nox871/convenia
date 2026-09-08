@@ -27,17 +27,17 @@ class PrimarySearchField extends StatelessWidget {
         focusNode: focusNode,
         textInputAction: TextInputAction.search,
         onSubmitted: onSubmitted,
-        style: AppText.body.copyWith(color: AppColors.brandDark, fontSize: 15),
+        style: AppText.body.copyWith(color: AppColors.ink, fontSize: 15),
         decoration: InputDecoration(
           hintText: hintText,
-          hintStyle: const TextStyle(color: AppColors.slate400, fontSize: 15),
-          prefixIcon: const Icon(Icons.search_rounded, color: AppColors.slate400),
+          hintStyle: const TextStyle(color: AppColors.inkFaint, fontSize: 15),
+          prefixIcon: const Icon(Icons.search_rounded, color: AppColors.inkFaint),
           suffixIcon: ValueListenableBuilder<TextEditingValue>(
             valueListenable: controller,
             builder: (context, value, _) {
               if (value.text.isEmpty) return const SizedBox.shrink();
               return IconButton(
-                icon: const Icon(Icons.close_rounded, color: AppColors.slate400),
+                icon: const Icon(Icons.close_rounded, color: AppColors.inkFaint),
                 onPressed: () => controller.clear(),
               );
             },

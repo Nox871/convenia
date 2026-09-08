@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'core/theme.dart';
-import 'screens/home_screen.dart';
+import 'screens/root_shell.dart';
 
 void main() {
   runApp(const ConveniaApp());
@@ -16,7 +16,7 @@ class ConveniaApp extends StatelessWidget {
       title: 'Convenia',
       debugShowCheckedModeBanner: false,
       theme: buildConveniaTheme(),
-      home: const HomeScreen(),
+      home: const RootShell(),
     );
   }
 }

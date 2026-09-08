@@ -3,60 +3,53 @@
 "Antes de comprar, elige dónde." App Android que consulta el backend REST de
 Convenia (`E:\convenia\backend`) para comparar precios entre D1 y Éxito.
 
-Este proyecto se escribió con todo el código Dart (`lib/`, `pubspec.yaml`)
-pero **sin el scaffolding nativo de Android** (`android/`), porque en la
-máquina donde se generó no había Flutter SDK instalado para correr
-`flutter create` de forma verificable. Ver "Puesta en marcha" abajo — es un
-único comando.
+Todo el código Dart (`lib/`, `pubspec.yaml`) está escrito, `pub get` ya se
+corrió con éxito (`pubspec.lock` presente, resuelto contra Flutter 3.47.2),
+y el scaffolding nativo de Android (`android/`) **ya está generado** —
+ya se puede compilar y correr. Los dos ajustes manuales que requería el
+`AndroidManifest.xml` (tráfico HTTP en claro y permiso de Internet) ya
+están aplicados en este repo.
 
 ## Requisitos
 
-- Flutter SDK (canal stable) — https://docs.flutter.dev/get-started/install/windows
-- Android Studio o al menos el Android SDK + un emulador (AVD) o dispositivo físico con depuración USB
-- Backend de Convenia corriendo (`E:\convenia\backend`, ver su propio README)
+- Flutter SDK (ya lo tienes instalado)
+- Un emulador Android (AVD) creado en Android Studio, **o** un teléfono
+  Android conectado por USB con la "depuración USB" activada
+- Backend de Convenia corriendo (`E:\convenia\backend`) — ver su propio
+  README; ahora mismo ya está corriendo en `http://127.0.0.1:8000`
 
-Verifica con:
+Verifica que todo esté en orden con:
 ```bash
 flutter doctor
 ```
+(si marca algo en rojo relacionado con Android, resuélvelo antes de seguir)
 
-## Puesta en marcha (una sola vez)
+## Cómo correrlo, paso a paso
 
-Desde `E:\convenia\mobile`:
+**Opción A — Android Studio (más simple si nunca corriste una app Flutter):**
+1. Abre Android Studio → "Open" → selecciona la carpeta `E:\convenia\mobile`.
+2. Espera a que termine de indexar/sincronizar (barra de progreso abajo).
+3. En la barra superior, junto al botón ▶ (Run), hay un selector de
+   dispositivo: elige un emulador ya creado (o crea uno nuevo con
+   "Device Manager" si no tienes ninguno — cualquier Pixel con Android 12+
+   funciona bien) o tu teléfono si está conectado por USB y aparece ahí.
+4. Presiona ▶. La primera vez tarda varios minutos (descarga/compila
+   Gradle). Cuando termine, se abre la app en el emulador/teléfono.
 
+**Opción B — Terminal:**
 ```bash
-flutter create --platforms=android --org com.convenia --project-name convenia_mobile .
-flutter pub get
+cd E:\convenia\mobile
+flutter devices          # confirma que ves un emulador o tu teléfono en la lista
+flutter run               # compila e instala; deja la terminal abierta (hot reload con 'r')
 ```
 
-(`--platforms=android` porque el objetivo de esta etapa es solo Android; se
-puede agregar iOS más adelante con `flutter create --platforms=ios .`.)
+Con cualquiera de las dos opciones, si usas un **emulador**, no necesitas
+hacer nada más: la app ya apunta por defecto a `http://10.0.2.2:8000`, que
+es como el emulador ve al backend corriendo en tu propia máquina.
 
-Esto genera `android/`, `ios/`, etc. sin tocar `lib/` ni `pubspec.yaml`
-(puede pedir confirmar sobrescribir `pubspec.yaml`/`.gitignore`; si pregunta,
-dile que NO sobrescriba `pubspec.yaml`, o vuelve a pegar el que está en este
-repo si lo sobrescribe).
-
-### Pasos manuales obligatorios después de `flutter create`
-
-1. **Tráfico HTTP en claro (cleartext).** El backend corre en `http://`
-   (no `https://`) en desarrollo. Android 9+ bloquea HTTP por defecto. En
-   `android/app/src/main/AndroidManifest.xml`, agrega el atributo en la
-   etiqueta `<application ...>`:
-   ```xml
-   <application
-       android:usesCleartextTraffic="true"
-       ...>
-   ```
-   (Solo para desarrollo. Si más adelante el backend sirve por HTTPS, se
-   puede quitar.)
-
-2. **Permiso de Internet.** Verifica que el mismo archivo tenga:
-   ```xml
-   <uses-permission android:name="android.permission.INTERNET"/>
-   ```
-   Las plantillas recientes de `flutter create` ya lo incluyen, pero
-   confírmalo.
+Si usas un **teléfono físico** por USB, necesitas dos cosas adicionales
+(ver la sección siguiente): que el backend escuche en todas las interfaces,
+no solo en `localhost`, y decirle a la app la IP de tu PC en la red Wi-Fi.
 
 ## Configuración de la URL del backend
 
@@ -86,14 +79,6 @@ static const String baseUrl = String.fromEnvironment(
   ```bash
   flutter run --dart-define=API_BASE_URL=http://192.168.80.28:8000
   ```
-
-## Ejecutar
-
-```bash
-flutter run
-# o, para dispositivo físico:
-flutter run --dart-define=API_BASE_URL=http://<IP-LAN-DEL-PC>:8000
-```
 
 ## Estructura
 
@@ -156,17 +141,48 @@ Por eso:
 No se modificó el backend para esto — es un límite real de los datos
 actuales, no un bug.
 
-## Pruebas realizadas
+## Compatibilidad con la homologación (`products`/`product_matches`)
 
-No se pudo ejecutar `flutter analyze` / `flutter run` en la máquina de
-desarrollo (Flutter SDK no instalado). Se validó en su lugar:
+Cuando corras el scraping/ETL/homologación (de forma manual, ver
+`E:\convenia\etl\README.md`) y `/api/products` empiece a devolver ids
+canónicos (`p-*`) para productos ya homologados entre D1 y Éxito, **no
+hace falta cambiar nada en la app móvil**: `ProductRepository` y las
+pantallas ya tratan el id como una cadena opaca de extremo a extremo, y
+`ComparisonBanner` ya maneja el caso de 2+ ofertas reales por producto (ver
+sección anterior). Es justamente el propósito de ese diseño.
+
+## Estado del entorno / pruebas realizadas
+
+`flutter`/`dart` no son accesibles desde el entorno de trabajo donde se
+escribió y revisó este código (por eso no se pudo correr `flutter analyze`
+ni `flutter run` desde ahí), pero en tu máquina real ya están instalados:
+existe `android/` generado por `flutter create`, `pubspec.lock` resuelto
+contra Flutter 3.47.2, y ya corregí ahí mismo los dos ajustes que ese
+scaffolding necesitaba para funcionar con este backend (ver más abajo) y el
+test de ejemplo que trae la plantilla por defecto (referenciaba un widget
+`MyApp` que no existe en esta app; lo reemplacé por un smoke test real de
+Home).
+
+Se validó, mediante revisión manual línea por línea de cada archivo en
+`lib/` y del `android/AndroidManifest.xml` generado:
 - Las respuestas reales de los 4 endpoints usados (`/api/products`,
   `/api/products/{id}`, `/api/products/{id}/compare`) contra el backend
-  corriendo con datos reales de D1/Éxito, confirmando que cada modelo Dart
+  corriendo con datos reales de D1, confirmando que cada modelo Dart
   (`lib/models/*.dart`) mapea exactamente las claves y tipos devueltos.
-- Revisión manual de cada widget en busca de overflows en anchos de 360 px
-  (la fila de precio de `ProductCard` se implementó con `Wrap` en vez de
-  `Row` por esto).
+- Revisión de cada widget en busca de overflows en anchos de 360 px (la
+  fila de precio de `ProductCard` usa `Wrap` en vez de `Row` por esto).
+- Revisión de consistencia de imports, tipos y nulabilidad en todo `lib/`.
+- `android/app/src/main/AndroidManifest.xml`: le faltaban
+  `android:usesCleartextTraffic="true"` (el backend es HTTP, no HTTPS) y
+  `<uses-permission android:name="android.permission.INTERNET"/>` — ya
+  agregados.
+- `test/widget_test.dart`: reemplazado el test de la plantilla por uno que
+  sí corresponde a esta app (verifica que Home muestra el logo, el título,
+  el buscador y las 4 búsquedas frecuentes).
 
-Pendiente cuando el entorno tenga Flutter instalado: `flutter analyze`,
-`flutter test` (aún no hay tests escritos) y verificación visual en un AVD.
+**Pendiente, solo a cargo tuyo porque requiere el SDK/emulador que no
+tengo accesible desde aquí:** correr `flutter run` (o abrir el proyecto en
+Android Studio, ver "Cómo correrlo" arriba) y confirmar visualmente el
+flujo Home → Resultados → Comparación contra el backend real. Si algo no
+compila o se ve distinto a lo esperado, dime el mensaje de error o una
+captura y lo corrijo puntualmente.

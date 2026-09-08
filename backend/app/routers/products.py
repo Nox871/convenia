@@ -5,7 +5,7 @@ from app.core.database import get_db
 from app.schemas.product import ProductDetail, ProductListResponse
 from app.services import product_service
 
-router = APIRouter(prefix="/api/products", tags=["products"])
+router = APIRouter(prefix="/api/v1/products", tags=["products"])
 
 
 @router.get("", response_model=ProductListResponse)
@@ -14,11 +14,16 @@ def list_products(
     supermarket: str | None = Query(
         None, description="Filtrar por código de supermercado, ej. 'D1' o 'EXITO'"
     ),
+    sort: str = Query(
+        "price", description="Criterio de orden: 'price' (menor precio) o 'recent' (más reciente)"
+    ),
     page: int = Query(1, ge=1, description="Página, 1-indexada"),
     limit: int = Query(20, ge=1, le=100, description="Resultados por página (máx. 100)"),
     conn: Connection = Depends(get_db),
 ):
-    return product_service.list_products(conn, q=q, supermarket=supermarket, page=page, limit=limit)
+    return product_service.list_products(
+        conn, q=q, supermarket=supermarket, sort=sort, page=page, limit=limit
+    )
 
 
 @router.get("/{product_id}", response_model=ProductDetail)

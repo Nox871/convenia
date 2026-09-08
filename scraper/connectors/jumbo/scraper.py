@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +23,14 @@ from crawl4ai import (
     CacheMode,
 )
 
+# scraper/connectors/jumbo/scraper.py -> parents[2] = scraper/
+_SCRAPER_ROOT = Path(__file__).resolve().parents[2]
+if str(_SCRAPER_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SCRAPER_ROOT))
+
+from core.category_filter import clasificar_categoria, factor_paginas, obtener_bucket  # noqa: E402
+from core.raw_writer import guardar_raw_snapshot  # noqa: E402
+
 
 # ============================================================
 # CONFIGURACIÓN
@@ -31,7 +40,7 @@ SOURCE = "JUMBO"
 
 DOMINIO_BASE = "https://www.jumbocolombia.com"
 
-MAX_CATEGORIAS = 20
+MAX_CATEGORIAS = 60
 MAX_PAGINAS_POR_CATEGORIA = 2
 
 # VTEX permite consultar hasta 50 productos por petición.
@@ -670,86 +679,92 @@ def es_url_comercial(url):
 # CATEGORÍAS
 # ============================================================
 
+# Estadísticas de la fase de descubrimiento, para el reporte final de main().
+ESTADISTICAS_CATEGORIAS = {"encontradas": 0, "aceptadas": 0, "descartadas": 0}
+
+
 def es_categoria_valida(url):
+    """
+    ALCANCE DEL PROYECTO: CANASTA FAMILIAR.
 
-    if not es_url_comercial(
-        url
-    ):
+    Jumbo Colombia expone rutas de categoría de distinta profundidad: desde
+    nodos raíz de alta densidad (ej. "/supermercado/despensa") hasta
+    sub-nodos hoja muy específicos (ej. "/co/supermercado/despensa/arroz-y-
+    granos") -- verificado contra el mega-menú real del sitio. También
+    expone verticales fuera de alcance (tecnología, moda, mascotas,
+    juguetes...) con la misma forma de URL, así que la forma de la ruta NO
+    basta para decidir relevancia.
 
+    Esta función solo aplica el clasificador por palabras clave
+    (`core.category_filter`) sobre el texto de la ruta, sin límite de
+    profundidad. La preferencia por nodos hoja (para no rasparlo todo por
+    el nodo raíz, de alto volumen) se resuelve aparte, en
+    `descubrir_categorias`, descartando cualquier candidata aceptada que
+    sea ruta-padre de otra candidata también aceptada.
+    """
+    if not es_url_comercial(url):
         return False
 
-    parsed = urlparse(
-        url
-    )
-
-    path = (
-        parsed.path
-        .rstrip("/")
-        .lower()
-    )
-
-    if not path:
+    path = urlparse(url).path.rstrip("/").lower()
+    if not path or "/coleccion/" in path:
         return False
 
-    # Las páginas de categoría de Jumbo Colombia
-    # normalmente utilizan rutas comerciales.
-    #
-    # Se descartan páginas demasiado profundas,
-    # productos y páginas institucionales.
-
-    segmentos = [
-        segmento
-        for segmento in path.split("/")
-        if segmento
-    ]
-
-    if not segmentos:
+    segmentos = [segmento for segmento in path.split("/") if segmento]
+    if not segmentos or len(segmentos) > 6:
         return False
 
-    # Una sola sección normalmente corresponde
-    # a una categoría/landing válida.
-    if len(segmentos) == 1:
+    texto = " ".join(segmentos).replace("-", " ")
+    return clasificar_categoria(texto)[0]
 
-        return True
 
-    # Categorías comerciales profundas.
-    prefijos = (
-        "/despensa/",
-        "/bebidas/",
-        "/aseo/",
-        "/electrohogar/",
-        "/electro-hogar/",
-        "/tecnologia/",
-        "/hogar/",
-        "/mascotas/",
-        "/jugueteria/",
-        "/juguetes/",
-        "/moda/",
-        "/deportes/",
-        "/belleza/",
-        "/salud/",
-        "/canasta/",
-        "/supermercado/",
+def _diversificar_por_bucket(urls):
+    """Reordena `urls` intercalando entre grupos temáticos (arroz, lácteo,
+    carne, verdura, aseo, ...) en vez de dejarlas en el orden de
+    descubrimiento.
+
+    Necesario porque la estrategia de nodos hoja (`_es_nodo_hoja`) puede
+    encontrar 15+ sub-nodos solo de "despensa" antes que ninguno de
+    frutas/lácteos/carnes/bebidas: sin este intercalado, un
+    MAX_CATEGORIAS finito agotaría el cupo entero en una sola categoría
+    padre, perdiendo cobertura de las demás.
+    """
+    por_bucket: dict[str, list] = {}
+    orden_buckets: list[str] = []
+
+    for url in urls:
+        segmentos = [s for s in urlparse(url).path.split("/") if s]
+        texto = " ".join(segmentos).replace("-", " ")
+        bucket = obtener_bucket(texto) or "_sin_bucket"
+        if bucket not in por_bucket:
+            por_bucket[bucket] = []
+            orden_buckets.append(bucket)
+        por_bucket[bucket].append(url)
+
+    resultado = []
+    indice = 0
+    while any(por_bucket[b][indice:indice + 1] for b in orden_buckets):
+        for bucket in orden_buckets:
+            cola = por_bucket[bucket]
+            if indice < len(cola):
+                resultado.append(cola[indice])
+        indice += 1
+
+    return resultado
+
+
+def _es_nodo_hoja(path_candidata, todas_las_paths):
+    """True si ninguna otra categoría aceptada es un descendiente de
+    `path_candidata` (es decir, si ninguna otra empieza con
+    "path_candidata/"). Un nodo raíz de alta densidad como
+    "/supermercado/despensa" se descarta en cuanto se descubre al menos un
+    sub-nodo suyo (ej. "/supermercado/despensa/arroz-y-granos"), porque
+    rasparlo por su hoja específica distribuye mejor el límite de páginas
+    que rasparlo entero por el nodo padre."""
+    prefijo = path_candidata.rstrip("/") + "/"
+    return not any(
+        otra != path_candidata and otra.startswith(prefijo)
+        for otra in todas_las_paths
     )
-
-    if path.startswith(
-        prefijos
-    ):
-
-        return True
-
-    # Cualquier URL que no parezca una página
-    # institucional puede ser utilizada como
-    # categoría potencial.
-    #
-    # Esto es deliberadamente más flexible que Éxito
-    # porque Jumbo puede cambiar sus nombres de categoría.
-
-    if len(segmentos) <= 3:
-
-        return True
-
-    return False
 
 
 # ============================================================
@@ -876,74 +891,77 @@ async def descubrir_categorias(
         )
     )
 
-    categorias = []
-
+    candidatas = []
     vistas = set()
 
     for enlace in enlaces:
-
-        href = enlace.get(
-            "href",
-            ""
-        )
-
+        href = enlace.get("href", "")
         if not href:
             continue
 
-        url = urljoin(
-            DOMINIO_BASE,
-            href
-        )
-
-        url = normalizar_url(
-            url
-        )
-
-        if not es_categoria_valida(
-            url
-        ):
-
+        url = normalizar_url(urljoin(DOMINIO_BASE, href))
+        if url in vistas or not es_url_comercial(url):
             continue
 
-        if url in vistas:
+        vistas.add(url)
+        candidatas.append(url)
 
-            continue
+    aceptadas = []
+    descartadas = []
 
-        vistas.add(
-            url
-        )
+    for url in candidatas:
+        path = urlparse(url).path.rstrip("/").lower()
+        if es_categoria_valida(url):
+            aceptadas.append(url)
+        elif "/coleccion/" in path:
+            descartadas.append((url, "colección numérica opaca, sin nombre legible"))
+        else:
+            segmentos = [s for s in path.split("/") if s]
+            texto = " ".join(segmentos).replace("-", " ")
+            _, motivo = clasificar_categoria(texto)
+            descartadas.append((url, motivo))
 
-        categorias.append(
-            url
-        )
+    # ESTRATEGIA DE EXTRACCIÓN POR NODOS HOJA: si el árbol trae tanto un
+    # nodo raíz de alta densidad (ej. "/supermercado/despensa") como sus
+    # sub-nodos específicos (ej. ".../despensa/arroz-y-granos"), se
+    # descarta el nodo raíz y se conservan solo las hojas. Así el límite
+    # de páginas por categoría se reparte entre cada sub-categoría
+    # concreta en vez de agotarse en las primeras páginas del nodo padre.
+    paths_aceptadas = [urlparse(u).path.rstrip("/").lower() for u in aceptadas]
+    hojas = []
+    for url in aceptadas:
+        path = urlparse(url).path.rstrip("/").lower()
+        if _es_nodo_hoja(path, paths_aceptadas):
+            hojas.append(url)
+        else:
+            descartadas.append((url, "nodo raíz colapsado a favor de sus sub-nodos hoja"))
+    # Intercalar por grupo temático ANTES de recortar por MAX_CATEGORIAS,
+    # para no agotar el cupo entero en las hojas de una sola categoría
+    # padre (ver docstring de _diversificar_por_bucket).
+    aceptadas = _diversificar_por_bucket(hojas)
 
-    print(
-        "[FASE 1] Categorías potenciales "
-        f"encontradas: {len(categorias)}"
-    )
+    print(f"[FASE 1] Candidatas comerciales encontradas: {len(candidatas)}")
+    print(f"[FASE 1] Categorías aceptadas (canasta familiar): {len(aceptadas)}")
+    for indice, url in enumerate(aceptadas, start=1):
+        print(f"  [OK]  [{indice}] {url}")
+    print(f"[FASE 1] Categorías descartadas: {len(descartadas)}")
+    for url, motivo in descartadas[:25]:
+        print(f"  [--]  {url}  ({motivo})")
+    if len(descartadas) > 25:
+        print(f"  ... y {len(descartadas) - 25} más.")
 
-    for indice, url in enumerate(
-        categorias,
-        start=1
-    ):
+    categorias_limitadas = aceptadas[:MAX_CATEGORIAS]
 
-        print(
-            f"  [{indice}] {url}"
-        )
-
-    categorias_limitadas = (
-        categorias[
-            :MAX_CATEGORIAS
-        ]
-    )
+    ESTADISTICAS_CATEGORIAS["encontradas"] = len(candidatas)
+    ESTADISTICAS_CATEGORIAS["aceptadas"] = len(categorias_limitadas)
+    ESTADISTICAS_CATEGORIAS["descartadas"] = len(candidatas) - len(categorias_limitadas)
 
     print()
-
     print(
         "[FASE 1] Se procesarán "
         f"{len(categorias_limitadas)} "
         "categorías "
-        "(límite configurado: "
+        "(límite técnico configurado: "
         f"{MAX_CATEGORIAS})."
     )
 
@@ -984,6 +1002,8 @@ async def consultar_vtex(
         "_to": hasta,
     }
 
+    endpoint = VTEX_SEARCH_ENDPOINT
+
     if collection_id:
 
         params["fq"] = (
@@ -993,27 +1013,20 @@ async def consultar_vtex(
 
     else:
 
-        parsed = urlparse(
-            categoria_url
-        )
+        # VTEX NO acepta `fq=C:<ruta>` para categorías por ruta de
+        # navegación (devuelve HTTP 400 "Can't create search criteria").
+        # Hay que anexar los segmentos de la ruta al propio endpoint y
+        # pasar `map=c,c,...` (una "c" por segmento) -- mismo fix
+        # verificado y aplicado en el scraper de Éxito.
 
-        path = (
-            parsed.path
-            .strip("/")
-        )
+        segmentos = [
+            segmento
+            for segmento in urlparse(categoria_url).path.split("/")
+            if segmento
+        ]
 
-        # VTEX category filter.
-        #
-        # En tiendas VTEX:
-        #
-        # map=c
-        # fq=C:<ruta>
-
-        params["map"] = "c"
-
-        params["fq"] = (
-            f"C:{path}"
-        )
+        params["map"] = ",".join(["c"] * len(segmentos)) if segmentos else "c"
+        endpoint = "/".join([VTEX_SEARCH_ENDPOINT, *segmentos])
 
     ultimo_error = None
 
@@ -1025,7 +1038,7 @@ async def consultar_vtex(
         try:
 
             response = await client.get(
-                VTEX_SEARCH_ENDPOINT,
+                endpoint,
                 params=params,
             )
 
@@ -2152,8 +2165,12 @@ def extraer_categoria(
         and categories
     ):
 
+        # VTEX devuelve `categories` de la MÁS específica a la MENOS
+        # específica (ej. ['/Despensa/Arroz/', '/Despensa/', '/']).
+        # Se toma categories[0] (la hoja), no categories[-1] (la raíz,
+        # que no dice nada sobre el producto).
         category = limpiar_texto(
-            categories[-1]
+            categories[0]
         )
 
     elif isinstance(
@@ -2850,9 +2867,23 @@ async def procesar_categoria(
 
     productos_categoria = []
 
+    # PAGINACIÓN DINÁMICA POR DENSIDAD: ver Carulla para el detalle. Con la
+    # estrategia de nodos hoja, cada sub-nodo específico (ej.
+    # "despensa/arroz-y-granos") ya recibe su propio presupuesto de
+    # páginas, pero igual puede tener mucho más volumen que una hoja de
+    # baja densidad (ej. "carnes/cortes-de-res").
+    segmentos_categoria = [s for s in urlparse(categoria_url).path.split("/") if s]
+    texto_categoria = " ".join(segmentos_categoria).replace("-", " ")
+    max_paginas = MAX_PAGINAS_POR_CATEGORIA * factor_paginas(texto_categoria)
+    if max_paginas != MAX_PAGINAS_POR_CATEGORIA:
+        print(
+            f"[PAGINACIÓN] Categoría de alta densidad detectada: "
+            f"{max_paginas} páginas (en vez de {MAX_PAGINAS_POR_CATEGORIA})."
+        )
+
     for pagina in range(
         1,
-        MAX_PAGINAS_POR_CATEGORIA + 1,
+        max_paginas + 1,
     ):
 
         print()
@@ -2995,11 +3026,6 @@ def guardar_raw(
     extraction_finished_at,
 ):
 
-    RUTA_RAW.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
     payload = {
 
         "source":
@@ -3039,20 +3065,9 @@ def guardar_raw(
             productos,
     }
 
-    with open(
-        RUTA_RAW_JSON,
-        "w",
-        encoding="utf-8",
-    ) as archivo:
+    ruta_escrita = guardar_raw_snapshot(RUTA_RAW, SOURCE, payload)
 
-        json.dump(
-            payload,
-            archivo,
-            ensure_ascii=False,
-            indent=2,
-        )
-
-    return payload
+    return payload, ruta_escrita
 
 
 # ============================================================
@@ -3298,7 +3313,7 @@ async def main():
         # GUARDAR
         # ====================================================
 
-        guardar_raw(
+        _, ruta_raw_escrita = guardar_raw(
             productos_totales,
             len(categorias),
             extraction_started_at,
@@ -3306,10 +3321,20 @@ async def main():
         )
 
         print()
+        print("=" * 60)
+        print("[REPORTE CANASTA FAMILIAR]")
+        print("=" * 60)
+        print("Jumbo:")
+        print(f"  Categorías encontradas:  {ESTADISTICAS_CATEGORIAS['encontradas']}")
+        print(f"  Categorías aceptadas:    {ESTADISTICAS_CATEGORIAS['aceptadas']}")
+        print(f"  Categorías descartadas:  {ESTADISTICAS_CATEGORIAS['descartadas']}")
+        print(f"  Productos obtenidos:     {len(productos_totales)}")
+
+        print()
 
         print(
             "Archivo: "
-            f"{RUTA_RAW_JSON}"
+            f"{ruta_raw_escrita}"
         )
 
         print()

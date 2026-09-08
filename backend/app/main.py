@@ -7,7 +7,17 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.core.exceptions import InvalidParameterError, NotFoundError
-from app.routers import comparison, health, prices, products
+from app.routers import (
+    categories,
+    comparison,
+    health,
+    history,
+    prices,
+    products,
+    shopping_lists,
+    stores,
+    supermarkets,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -57,3 +67,8 @@ app.include_router(health.router, prefix="/api")
 app.include_router(products.router)
 app.include_router(prices.router)
 app.include_router(comparison.router)
+app.include_router(history.router)
+app.include_router(supermarkets.router)
+app.include_router(categories.router)
+app.include_router(shopping_lists.router)
+app.include_router(stores.router)

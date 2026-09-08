@@ -8,12 +8,12 @@ import 'supermarket_badge.dart';
 
 /// Tarjeta de producto en la lista de Resultados.
 ///
-/// Nota de diseño importante: `GET /api/products` devuelve HOY una fila por
-/// `source_product` de UN solo supermercado (no hay homologación todavía),
-/// así que esta tarjeta muestra el precio real disponible para ESE
-/// supermercado — nunca fabrica un precio para el otro. La comparación
-/// "D1 vs Éxito" con ahorro y ganador se muestra en la pantalla de
-/// Detalle/Comparación, que sí consulta `/compare` por producto.
+/// Un producto ya homologado (`offersCount > 1`) muestra "Desde {precio} en
+/// N supermercados" -- el mejor precio conocido, sin insinuar que ese precio
+/// aplica a todas las tiendas. Un producto todavía sin homologar
+/// (`offersCount == 1`) muestra el precio real de su única tienda conocida,
+/// sin lenguaje comparativo. La comparación completa vive en Detalle
+/// (`/compare`).
 class ProductCard extends StatelessWidget {
   final ProductListItem item;
   final VoidCallback onTap;
@@ -35,7 +35,7 @@ class ProductCard extends StatelessWidget {
         decoration: BoxDecoration(
           color: AppColors.white,
           borderRadius: BorderRadius.circular(AppSpacing.cardRadius),
-          border: Border.all(color: AppColors.slate100),
+          border: Border.all(color: AppColors.mist),
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -65,31 +65,42 @@ class ProductCard extends StatelessWidget {
                     Text(presentation, style: AppText.caption),
                   ],
                   const SizedBox(height: AppSpacing.sm),
-                  Wrap(
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    spacing: AppSpacing.sm,
-                    runSpacing: 4,
-                    children: [
-                      SupermarketBadge(code: item.supermarketCode, name: item.supermarketName),
-                      if (item.price != null) ...[
-                        Text(formatCop(item.price!), style: AppText.priceCard),
-                        if (hasDiscount)
-                          Text(
-                            formatCop(item.listPrice!),
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: AppColors.slate400,
-                              decoration: TextDecoration.lineThrough,
-                            ),
+                  if (item.offersCount > 1) ...[
+                    Text(
+                      'Desde ${item.price != null ? formatCop(item.price!) : '—'} '
+                      'en ${item.offersCount} supermercados',
+                      style: AppText.priceCard,
+                    ),
+                  ] else
+                    Wrap(
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: AppSpacing.sm,
+                      runSpacing: 4,
+                      children: [
+                        if (item.supermarketCode != null && item.supermarketName != null)
+                          SupermarketBadge(
+                            code: item.supermarketCode!,
+                            name: item.supermarketName!,
                           ),
-                      ] else
-                        const Text('Precio no disponible', style: AppText.caption),
-                    ],
-                  ),
+                        if (item.price != null) ...[
+                          Text(formatCop(item.price!), style: AppText.priceCard),
+                          if (hasDiscount)
+                            Text(
+                              formatCop(item.listPrice!),
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: AppColors.inkFaint,
+                                decoration: TextDecoration.lineThrough,
+                              ),
+                            ),
+                        ] else
+                          Text('Precio no disponible', style: AppText.caption),
+                      ],
+                    ),
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right_rounded, color: AppColors.slate400),
+            const Icon(Icons.chevron_right_rounded, color: AppColors.inkFaint),
           ],
         ),
       ),

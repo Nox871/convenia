@@ -17,8 +17,18 @@ class CompareResponse {
   final ProductRefLite product;
   final List<PriceOffer> offers;
   final PriceOffer? bestPrice;
+  final bool isPartial;
+  final double? savingsAbsolute;
+  final double? savingsPercentage;
 
-  const CompareResponse({required this.product, required this.offers, required this.bestPrice});
+  const CompareResponse({
+    required this.product,
+    required this.offers,
+    required this.bestPrice,
+    required this.isPartial,
+    required this.savingsAbsolute,
+    required this.savingsPercentage,
+  });
 
   factory CompareResponse.fromJson(Map<String, dynamic> json) {
     return CompareResponse(
@@ -29,6 +39,9 @@ class CompareResponse {
       bestPrice: json['best_price'] == null
           ? null
           : PriceOffer.fromJson(json['best_price'] as Map<String, dynamic>),
+      isPartial: json['is_partial'] as bool? ?? false,
+      savingsAbsolute: (json['savings_absolute'] as num?)?.toDouble(),
+      savingsPercentage: (json['savings_percentage'] as num?)?.toDouble(),
     );
   }
 }

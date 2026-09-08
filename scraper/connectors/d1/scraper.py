@@ -26,7 +26,8 @@ _SCRAPER_ROOT = Path(__file__).resolve().parents[2]
 if str(_SCRAPER_ROOT) not in sys.path:
     sys.path.insert(0, str(_SCRAPER_ROOT))
 
-from core.category_filter import clasificar_categoria  # noqa: E402
+from core.category_filter import clasificar_categoria, factor_paginas  # noqa: E402
+from core.raw_writer import guardar_raw_snapshot  # noqa: E402
 
 
 # ============================================================
@@ -37,7 +38,7 @@ SOURCE = "D1"
 DOMINIO_BASE = "https://www.d1.com.co"
 
 MAX_CATEGORIAS = 10
-MAX_PAGINAS_POR_CATEGORIA = 1  # TEMP: reducido solo para validación, revertir a 4
+MAX_PAGINAS_POR_CATEGORIA = 4
 
 DELAY_ENTRE_PAGINAS = 0.50
 DELAY_ENTRE_PRODUCTOS = 0.20
@@ -790,7 +791,18 @@ async def procesar_categoria(
 
     productos_categoria = []
 
-    for pagina in range(1, MAX_PAGINAS_POR_CATEGORIA + 1):
+    # PAGINACIÓN DINÁMICA POR DENSIDAD (ver Carulla/Éxito para el detalle):
+    # "despensa"/"abarrotes" tiene muchas más referencias que categorías de
+    # bajo volumen, así que se multiplica el límite técnico de páginas
+    # para esas categorías en vez de truncarlas con el mismo tope fijo.
+    max_paginas = MAX_PAGINAS_POR_CATEGORIA * factor_paginas(categoria_desde_url(categoria_url))
+    if max_paginas != MAX_PAGINAS_POR_CATEGORIA:
+        print(
+            f"[PAGINACIÓN] Categoría de alta densidad detectada: "
+            f"{max_paginas} páginas (en vez de {MAX_PAGINAS_POR_CATEGORIA})."
+        )
+
+    for pagina in range(1, max_paginas + 1):
         pagina_url = construir_url_pagina_categoria(categoria_url, pagina)
 
         print()
@@ -826,7 +838,7 @@ async def procesar_categoria(
 
         productos_categoria.extend(productos)
 
-        if pagina >= MAX_PAGINAS_POR_CATEGORIA:
+        if pagina >= max_paginas:
             break
 
         await asyncio.sleep(DELAY_ENTRE_PAGINAS)
@@ -849,8 +861,6 @@ def guardar_raw(
     extraction_started_at,
     extraction_finished_at,
 ):
-    RUTA_RAW.mkdir(parents=True, exist_ok=True)
-
     payload = {
         "source": SOURCE,
         "start_url": DOMINIO_BASE,
@@ -865,10 +875,9 @@ def guardar_raw(
         "products": productos,
     }
 
-    with open(RUTA_RAW_JSON, "w", encoding="utf-8") as archivo:
-        json.dump(payload, archivo, ensure_ascii=False, indent=2)
+    ruta_escrita = guardar_raw_snapshot(RUTA_RAW, SOURCE, payload)
 
-    return payload
+    return payload, ruta_escrita
 
 
 # ============================================================
@@ -935,7 +944,7 @@ async def main():
 
         imprimir_calidad(productos_totales)
 
-        guardar_raw(
+        _, ruta_raw_escrita = guardar_raw(
             productos_totales,
             len(categorias),
             extraction_started_at,
@@ -953,7 +962,7 @@ async def main():
         print(f"  Productos obtenidos:     {len(productos_totales)}")
 
         print()
-        print(f"Archivo: {RUTA_RAW_JSON}")
+        print(f"Archivo: {ruta_raw_escrita}")
         print()
         print("=" * 60)
         print("[FIN]")

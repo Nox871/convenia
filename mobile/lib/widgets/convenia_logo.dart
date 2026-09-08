@@ -17,7 +17,7 @@ class ConveniaMark extends StatelessWidget {
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: AppColors.brandDark,
+        color: AppColors.ink,
         borderRadius: BorderRadius.circular(size * 0.28),
       ),
       padding: EdgeInsets.all(size * 0.2),
@@ -30,7 +30,7 @@ class _CompareSymbolPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final linePaint = Paint()
-      ..color = AppColors.slate400.withOpacity(0.9)
+      ..color = AppColors.inkFaint.withValues(alpha: 0.9)
       ..strokeWidth = size.width * 0.11
       ..strokeCap = StrokeCap.round;
 
@@ -45,19 +45,19 @@ class _CompareSymbolPainter extends CustomPainter {
     canvas.drawCircle(
       neutralPoint,
       neutralRadius,
-      Paint()..color = AppColors.slate400,
+      Paint()..color = AppColors.inkFaint,
     );
 
     canvas.drawCircle(
       optimalPoint,
       optimalRadius,
-      Paint()..color = AppColors.bestPriceGreen,
+      Paint()..color = AppColors.success,
     );
     canvas.drawCircle(
       optimalPoint,
       optimalRadius,
       Paint()
-        ..color = AppColors.bestPriceBorder
+        ..color = AppColors.successBorder
         ..style = PaintingStyle.stroke
         ..strokeWidth = size.width * 0.045,
     );
@@ -85,7 +85,7 @@ class ConveniaWordmark extends StatelessWidget {
           style: TextStyle(
             fontSize: 20,
             fontWeight: FontWeight.w800,
-            color: AppColors.brandDark,
+            color: AppColors.ink,
           ),
         ),
       ],

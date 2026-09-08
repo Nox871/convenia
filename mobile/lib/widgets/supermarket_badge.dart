@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../core/theme.dart';
 
-/// Chip de color de marca para identificar de un vistazo a qué supermercado
-/// pertenece un precio (rojo D1 / ámbar Éxito).
+/// Chip neutral que identifica de un vistazo a qué supermercado pertenece un
+/// precio -- por NOMBRE, nunca por color. Los supermercados se mantienen
+/// visualmente neutrales entre sí: introducir un color por tienda rompería
+/// la identidad de marca de Convenia y además dejaría de escalar cuando se
+/// agreguen más fuentes.
 class SupermarketBadge extends StatelessWidget {
   final String code;
   final String name;
@@ -12,16 +15,15 @@ class SupermarketBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = AppColors.forSupermarket(code);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: 3),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
+        color: AppColors.lavenderMist,
         borderRadius: BorderRadius.circular(AppSpacing.chipRadius),
       ),
       child: Text(
         name,
-        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: color),
+        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.ink),
       ),
     );
   }

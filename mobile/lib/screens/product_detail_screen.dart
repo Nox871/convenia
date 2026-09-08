@@ -6,8 +6,10 @@ import '../state/product_detail_controller.dart';
 import '../state/view_status.dart';
 import '../widgets/comparison_banner.dart';
 import '../widgets/price_offer_tile.dart';
+import '../widgets/add_to_list_sheet.dart';
 import '../widgets/product_image.dart';
 import '../widgets/state_views.dart';
+import 'price_history_screen.dart';
 
 class ProductDetailScreen extends StatelessWidget {
   final String productId;
@@ -20,7 +22,7 @@ class ProductDetailScreen extends StatelessWidget {
     return ChangeNotifierProvider(
       create: (_) => ProductDetailController(productId: productId),
       child: Scaffold(
-        appBar: AppBar(title: const Text('Comparación', style: AppText.screenTitle)),
+        appBar: AppBar(title: Text('Comparación', style: AppText.screenTitle)),
         body: SafeArea(child: _DetailBody(fallbackName: productName)),
       ),
     );
@@ -50,8 +52,24 @@ class _DetailBody extends StatelessWidget {
       case ViewStatus.loaded:
         final detail = controller.detail!;
         final comparison = controller.comparison!;
+        // Ofertas con dato primero (ordenadas por precio), "Sin datos" al final.
         final sortedOffers = [...comparison.offers]
-          ..sort((a, b) => a.price.compareTo(b.price));
+          ..sort((a, b) {
+            if (a.hasData && b.hasData) return a.price!.compareTo(b.price!);
+            if (a.hasData) return -1;
+            if (b.hasData) return 1;
+            return 0;
+          });
+        final conDatos = sortedOffers.where((o) => o.hasData).length;
+        // Nunca "Todas las ofertas": son observaciones de precio, no ofertas
+        // comerciales, y el título debe reflejar honestamente cuántas hay.
+        final seccionTitulo = conDatos <= 1 ? 'Disponibilidad' : 'Precios registrados';
+        // Con 0-1 ofertas reales, mostrar filas "Sin datos" de las demás
+        // tiendas no ayuda a decidir (es obvio que un producto de una sola
+        // tienda no está en las otras) -- sólo satura la pantalla. Con 2+
+        // ofertas reales, sí vale la pena mostrar dónde NO está disponible.
+        final offersToShow =
+            conDatos <= 1 ? sortedOffers.where((o) => o.hasData).toList() : sortedOffers;
 
         return SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(
@@ -86,12 +104,48 @@ class _DetailBody extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: AppSpacing.xl),
-              ComparisonBanner(offers: comparison.offers, bestPrice: comparison.bestPrice),
+              ComparisonBanner(
+                offers: comparison.offers,
+                bestPrice: comparison.bestPrice,
+                isPartial: comparison.isPartial,
+                savingsAbsolute: comparison.savingsAbsolute,
+                savingsPercentage: comparison.savingsPercentage,
+              ),
               const SizedBox(height: AppSpacing.xl),
-              if (sortedOffers.isNotEmpty) ...[
-                const Text('Todas las ofertas', style: AppText.sectionTitle),
-                const SizedBox(height: AppSpacing.md),
-                ...sortedOffers.map(
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(seccionTitulo, style: AppText.sectionTitle),
+                  Row(
+                    children: [
+                      IconButton(
+                        tooltip: 'Agregar a lista',
+                        icon: const Icon(Icons.playlist_add_rounded),
+                        onPressed: () => showAddToListSheet(context, comparison.product.id),
+                      ),
+                      IconButton(
+                        tooltip: 'Ver historial',
+                        icon: const Icon(Icons.show_chart_rounded),
+                        onPressed: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => PriceHistoryScreen(
+                                productId: comparison.product.id,
+                                productName: comparison.product.name,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.md),
+              if (offersToShow.isEmpty)
+                Text('Todavía no tenemos precios registrados.', style: AppText.body)
+              else
+                ...offersToShow.map(
                   (offer) => Padding(
                     padding: const EdgeInsets.only(bottom: AppSpacing.sm),
                     child: PriceOfferTile(
@@ -101,7 +155,6 @@ class _DetailBody extends StatelessWidget {
                     ),
                   ),
                 ),
-              ],
             ],
           ),
         );
@@ -121,7 +174,7 @@ class _DetailSkeleton extends StatelessWidget {
       height: height,
       margin: const EdgeInsets.only(bottom: AppSpacing.md),
       decoration: BoxDecoration(
-        color: AppColors.slate100,
+        color: AppColors.mist,
         borderRadius: BorderRadius.circular(8),
       ),
     );

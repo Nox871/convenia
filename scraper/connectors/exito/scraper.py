@@ -28,7 +28,8 @@ _SCRAPER_ROOT = Path(__file__).resolve().parents[2]
 if str(_SCRAPER_ROOT) not in sys.path:
     sys.path.insert(0, str(_SCRAPER_ROOT))
 
-from core.category_filter import clasificar_categoria  # noqa: E402
+from core.category_filter import clasificar_categoria, factor_paginas  # noqa: E402
+from core.raw_writer import guardar_raw_snapshot  # noqa: E402
 
 
 # ============================================================
@@ -39,7 +40,7 @@ SOURCE = "EXITO"
 DOMINIO_BASE = "https://www.exito.com"
 
 MAX_CATEGORIAS = 10
-MAX_PAGINAS_POR_CATEGORIA = 1  # TEMP: reducido solo para validación, revertir a 4
+MAX_PAGINAS_POR_CATEGORIA = 4
 
 # VTEX permite hasta 50 productos por petición.
 PRODUCTOS_POR_PETICION = 50
@@ -525,6 +526,56 @@ def _extraer_urls_comerciales(resultado, base_url):
     return urls
 
 
+async def _extraer_hub_con_reintento(crawler, hub_url, base_url, prefijo_esperado,
+                                      minimo_esperado=5, intentos=3):
+    """Crawlea `hub_url` y extrae sus URLs comerciales, reintentando con más
+    tiempo de espera si trae muy pocos enlaces bajo `prefijo_esperado`.
+
+    El mega-menú de algunos sitios VTEX carga de forma diferida (lazy) y no
+    siempre termina de renderizar dentro del tiempo de espera por defecto:
+    la MISMA URL puede devolver 3 subcategorías en una corrida y 7 en la
+    siguiente (verificado en Olímpica; se aplica el mismo resguardo aquí
+    por si acaso). No es un problema de la lógica de validación de URLs,
+    sino de cuánto tarda en cargar la página.
+    """
+    mejor_urls: list[str] = []
+
+    for intento in range(1, intentos + 1):
+        espera = 3 + (intento - 1) * 5  # 3s, 8s, 13s...
+        config = CrawlerRunConfig(
+            cache_mode=CacheMode.BYPASS,
+            wait_for="css:body",
+            delay_before_return_html=espera,
+            page_timeout=120000,
+            magic=True,
+            simulate_user=True,
+            override_navigator=True,
+        )
+
+        resultado = await crawler.arun(url=hub_url, config=config)
+        if not resultado.success:
+            print(f"[AVISO] Intento {intento}: no se pudo abrir {hub_url}: {resultado.error_message}")
+            continue
+
+        urls = _extraer_urls_comerciales(resultado, base_url)
+        relevantes = [u for u in urls if prefijo_esperado in u]
+
+        if len(relevantes) > len([u for u in mejor_urls if prefijo_esperado in u]):
+            mejor_urls = urls
+
+        if len(relevantes) >= minimo_esperado:
+            break
+
+        if intento < intentos:
+            print(
+                f"[AVISO] Hub {hub_url}: solo {len(relevantes)} subcategorías "
+                f"relevantes en el intento {intento} (esperaba >= {minimo_esperado}). "
+                "Reintentando con más tiempo de espera..."
+            )
+
+    return mejor_urls
+
+
 async def descubrir_categorias(crawler):
     print()
     print("=" * 60)
@@ -547,13 +598,12 @@ async def descubrir_categorias(crawler):
     # moda...) y el hub "/mercado/home". Para llegar a las categorías de
     # canasta familiar reales hay que entrar a ese hub.
     hub_mercado = f"{DOMINIO_BASE}/mercado/home"
-    resultado_mercado = await crawler.arun(url=hub_mercado, config=config)
-    if resultado_mercado.success:
-        for url in _extraer_urls_comerciales(resultado_mercado, DOMINIO_BASE):
-            if url not in candidatas:
-                candidatas.append(url)
-    else:
-        print(f"[AVISO] No se pudo abrir el hub de mercado: {hub_mercado}")
+    urls_hub = await _extraer_hub_con_reintento(
+        crawler, hub_mercado, DOMINIO_BASE, prefijo_esperado="/mercado/"
+    )
+    for url in urls_hub:
+        if url not in candidatas:
+            candidatas.append(url)
 
     aceptadas = []
     descartadas = []
@@ -1347,7 +1397,22 @@ async def procesar_categoria(
 
     productos_categoria = []
 
-    for pagina in range(1, MAX_PAGINAS_POR_CATEGORIA + 1):
+    # PAGINACIÓN DINÁMICA POR DENSIDAD: ver Carulla para el detalle. Éxito
+    # descubre "mercado/despensa" (nodo padre, alto volumen) y también
+    # alguna subcategoría suya (ej. "cafe-chocolate..."), pero el resto de
+    # despensa (arroz, aceites, granos...) solo se cubre a través del nodo
+    # padre -- sin este multiplicador quedaría igual de truncado que
+    # Carulla.
+    segmentos_categoria = [s for s in urlparse(categoria_url).path.split("/") if s]
+    texto_categoria = " ".join(segmentos_categoria).replace("-", " ")
+    max_paginas = MAX_PAGINAS_POR_CATEGORIA * factor_paginas(texto_categoria)
+    if max_paginas != MAX_PAGINAS_POR_CATEGORIA:
+        print(
+            f"[PAGINACIÓN] Categoría de alta densidad detectada: "
+            f"{max_paginas} páginas (en vez de {MAX_PAGINAS_POR_CATEGORIA})."
+        )
+
+    for pagina in range(1, max_paginas + 1):
         print()
         print("-" * 60)
         print("[PÁGINA]")
@@ -1438,8 +1503,6 @@ def guardar_raw(
     extraction_started_at,
     extraction_finished_at,
 ):
-    RUTA_RAW.mkdir(parents=True, exist_ok=True)
-
     payload = {
         "source": SOURCE,
         "start_url": DOMINIO_BASE,
@@ -1455,10 +1518,9 @@ def guardar_raw(
         "products": productos,
     }
 
-    with open(RUTA_RAW_JSON, "w", encoding="utf-8") as archivo:
-        json.dump(payload, archivo, ensure_ascii=False, indent=2)
+    ruta_escrita = guardar_raw_snapshot(RUTA_RAW, SOURCE, payload)
 
-    return payload
+    return payload, ruta_escrita
 
 
 # ============================================================
@@ -1542,7 +1604,7 @@ async def main():
 
         imprimir_calidad(productos_totales)
 
-        guardar_raw(
+        _, ruta_raw_escrita = guardar_raw(
             productos_totales,
             len(categorias),
             extraction_started_at,
@@ -1560,7 +1622,7 @@ async def main():
         print(f"  Productos obtenidos:     {len(productos_totales)}")
 
         print()
-        print(f"Archivo: {RUTA_RAW_JSON}")
+        print(f"Archivo: {ruta_raw_escrita}")
         print()
         print("=" * 60)
         print("[FIN]")

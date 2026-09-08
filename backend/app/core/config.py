@@ -27,6 +27,16 @@ class Settings(BaseSettings):
     default_page_size: int = 20
     max_page_size: int = 100
 
+    # Antigüedad máxima (en horas) antes de marcar una observación de precio
+    # como desactualizada (`is_stale`) en /compare — leído una sola vez al
+    # iniciar el proceso, no resuelto por request.
+    data_freshness_threshold_hours: int = 48
+
+    # Velocidad de caminata promedio usada para estimar "minutos a pie"
+    # hacia un establecimiento cercano. Configurable, no hardcodeada en la
+    # lógica de negocio.
+    walking_speed_kmh: float = 4.5
+
     @property
     def database_url(self) -> str:
         return (

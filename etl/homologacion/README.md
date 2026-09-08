@@ -1,9 +1,10 @@
 # Homologación
 
 Paso **posterior e independiente** al ETL. Lee `source_products` (ya
-cargados por `etl.etl_d1` / `etl.etl_exito`) y decide qué pares D1↔Éxito
-representan el mismo producto, generando `products` (canónico) y
-`product_matches` (la relación).
+cargados por `etl.etl_d1` / `etl.etl_exito` / `etl.etl_carulla` /
+`etl.etl_jumbo` / `etl.etl_olimpica`) y decide qué productos, sin importar
+de cuáles de los 5 supermercados vengan, representan el mismo producto real,
+generando `products` (canónico) y `product_matches` (la relación).
 
 ## Ejecutar
 
@@ -11,8 +12,21 @@ representan el mismo producto, generando `products` (canónico) y
 python -m etl.homologacion.run
 ```
 
-Requiere haber corrido el ETL de D1 y Éxito antes (necesita `source_products`
-pobladas). No modifica `source_products` ni `price_observations`.
+Requiere haber corrido el ETL de al menos dos supermercados antes (necesita
+`source_products` pobladas). No modifica `source_products` ni
+`price_observations`.
+
+## N supermercados, no solo dos
+
+Dentro de cada bucket de categoría se comparan **todos los pares de
+productos de supermercados distintos** (nunca dos productos del mismo
+supermercado entre sí). Los pares con score suficiente se agrupan con un
+*union-find*: si D1-A coincide con Éxito-B, y Éxito-B a su vez coincide con
+Jumbo-C, los tres terminan en el mismo `products.id` aunque D1-A y Jumbo-C
+nunca se hayan comparado directamente entre sí. Así se evita tener que
+comparar cada par de cadenas de supermercados a mano al agregar Carulla,
+Jumbo u Olímpica — agregar un sexto supermercado en el futuro no requiere
+ningún cambio en este módulo.
 
 ## Señales usadas
 

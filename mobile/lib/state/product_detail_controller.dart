@@ -8,8 +8,8 @@ import 'view_status.dart';
 
 /// Estado de la pantalla Detalle/Comparación.
 ///
-/// Combina `GET /api/products/{id}` (metadata del producto) y
-/// `GET /api/products/{id}/compare` (ofertas + mejor precio, ya calculado
+/// Combina `GET /api/v1/products/{id}` (metadata del producto) y
+/// `GET /api/v1/products/{id}/compare` (ofertas + mejor precio, ya calculado
 /// por el backend con datos reales). No se usa `/prices` aquí porque
 /// `/compare` ya incluye el mismo listado de ofertas más el mejor precio;
 /// `ProductRepository.getProductPrices` queda disponible para un caso de uso

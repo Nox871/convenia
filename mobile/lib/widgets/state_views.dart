@@ -31,7 +31,7 @@ class _SkeletonCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.white,
         borderRadius: BorderRadius.circular(AppSpacing.cardRadius),
-        border: Border.all(color: AppColors.slate100),
+        border: Border.all(color: AppColors.mist),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -60,7 +60,7 @@ class _SkeletonCard extends StatelessWidget {
       width: width,
       height: height,
       decoration: BoxDecoration(
-        color: AppColors.slate100,
+        color: AppColors.mist,
         borderRadius: BorderRadius.circular(radius),
       ),
     );
@@ -94,10 +94,10 @@ class EmptyResultsView extends StatelessWidget {
               width: 72,
               height: 72,
               decoration: const BoxDecoration(
-                color: AppColors.slate100,
+                color: AppColors.mist,
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.search_off_rounded, color: AppColors.slate400, size: 32),
+              child: const Icon(Icons.search_off_rounded, color: AppColors.inkFaint, size: 32),
             ),
             const SizedBox(height: AppSpacing.lg),
             Text(title, style: AppText.screenTitle, textAlign: TextAlign.center),
@@ -152,7 +152,7 @@ class ErrorResultsView extends StatelessWidget {
             const SizedBox(height: AppSpacing.lg),
             Text(message, style: AppText.screenTitle, textAlign: TextAlign.center),
             const SizedBox(height: AppSpacing.sm),
-            const Text(
+            Text(
               'Verifica tu conexión o intenta nuevamente.',
               style: AppText.body,
               textAlign: TextAlign.center,

@@ -34,6 +34,7 @@ class _ResultsView extends StatefulWidget {
 class _ResultsViewState extends State<_ResultsView> {
   bool _editingQuery = false;
   late final TextEditingController _editController;
+  final _editFocusNode = FocusNode();
   final _scrollController = ScrollController();
 
   @override
@@ -51,9 +52,15 @@ class _ResultsViewState extends State<_ResultsView> {
     }
   }
 
+  void _openEdit() {
+    setState(() => _editingQuery = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _editFocusNode.requestFocus());
+  }
+
   @override
   void dispose() {
     _editController.dispose();
+    _editFocusNode.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -70,16 +77,29 @@ class _ResultsViewState extends State<_ResultsView> {
               controller: controller,
               editing: _editingQuery,
               editController: _editController,
-              onToggleEdit: () => setState(() => _editingQuery = !_editingQuery),
+              editFocusNode: _editFocusNode,
+              onToggleEdit: () {
+                if (_editingQuery) {
+                  setState(() => _editingQuery = false);
+                } else {
+                  _openEdit();
+                }
+              },
               onSubmitQuery: (value) {
                 setState(() => _editingQuery = false);
                 controller.updateQuery(value);
               },
             ),
             const SizedBox(height: AppSpacing.sm),
-            _FilterBar(controller: controller),
+            _SortBar(controller: controller),
             const SizedBox(height: AppSpacing.sm),
-            Expanded(child: _Body(controller: controller, scrollController: _scrollController)),
+            Expanded(
+              child: _Body(
+                controller: controller,
+                scrollController: _scrollController,
+                onSearchAgain: _openEdit,
+              ),
+            ),
           ],
         ),
       ),
@@ -91,6 +111,7 @@ class _Header extends StatelessWidget {
   final SearchResultsController controller;
   final bool editing;
   final TextEditingController editController;
+  final FocusNode editFocusNode;
   final VoidCallback onToggleEdit;
   final ValueChanged<String> onSubmitQuery;
 
@@ -98,6 +119,7 @@ class _Header extends StatelessWidget {
     required this.controller,
     required this.editing,
     required this.editController,
+    required this.editFocusNode,
     required this.onToggleEdit,
     required this.onSubmitQuery,
   });
@@ -114,9 +136,9 @@ class _Header extends StatelessWidget {
             children: [
               IconButton(
                 onPressed: () => Navigator.of(context).maybePop(),
-                icon: const Icon(Icons.arrow_back_rounded, color: AppColors.brandDark),
+                icon: const Icon(Icons.arrow_back_rounded, color: AppColors.ink),
               ),
-              const Text('Resultados', style: AppText.screenTitle),
+              Text('Resultados', style: AppText.screenTitle),
               const Spacer(),
               TextButton.icon(
                 onPressed: onToggleEdit,
@@ -128,7 +150,11 @@ class _Header extends StatelessWidget {
           if (editing)
             Padding(
               padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-              child: PrimarySearchField(controller: editController, onSubmitted: onSubmitQuery),
+              child: PrimarySearchField(
+                controller: editController,
+                onSubmitted: onSubmitQuery,
+                focusNode: editFocusNode,
+              ),
             )
           else
             Padding(
@@ -140,7 +166,7 @@ class _Header extends StatelessWidget {
                     const TextSpan(text: 'Buscaste: '),
                     TextSpan(
                       text: '"${controller.query}"',
-                      style: const TextStyle(fontWeight: FontWeight.w700, color: AppColors.brandDark),
+                      style: const TextStyle(fontWeight: FontWeight.w700, color: AppColors.ink),
                     ),
                     TextSpan(text: '  ·  ${controller.total} productos encontrados'),
                   ],
@@ -153,28 +179,43 @@ class _Header extends StatelessWidget {
   }
 }
 
-class _FilterBar extends StatelessWidget {
+/// Barra de ORDEN (estilo Google Flights): criterios claros y pocos, nunca
+/// una lista fija de supermercados. "Más cercano" queda deshabilitado con un
+/// tooltip honesto -- el backend todavía no tiene establecimientos físicos
+/// reales que respalden ese criterio, y nunca se ofrece un orden que no
+/// pueda producir un resultado real.
+class _SortBar extends StatelessWidget {
   final SearchResultsController controller;
 
-  const _FilterBar({required this.controller});
+  const _SortBar({required this.controller});
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
       height: 40,
-      child: ListView.separated(
+      child: ListView(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: AppSpacing.horizontalPage),
-        itemCount: SupermarketFilter.values.length,
-        separatorBuilder: (_, __) => const SizedBox(width: AppSpacing.sm),
-        itemBuilder: (context, index) {
-          final option = SupermarketFilter.values[index];
-          return FilterChoiceChip(
-            label: option.label,
-            selected: controller.filter == option,
-            onTap: () => controller.setFilter(option),
-          );
-        },
+        children: [
+          for (final option in ResultsSort.values) ...[
+            FilterChoiceChip(
+              label: option.label,
+              selected: controller.sort == option,
+              onTap: () => controller.setSort(option),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+          ],
+          Tooltip(
+            message: 'Actívalo dando permiso de ubicación y cuando tengamos '
+                'establecimientos físicos cerca de ti',
+            child: FilterChoiceChip(
+              label: 'Más cercano',
+              selected: false,
+              enabled: false,
+              onTap: () {},
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -183,8 +224,13 @@ class _FilterBar extends StatelessWidget {
 class _Body extends StatelessWidget {
   final SearchResultsController controller;
   final ScrollController scrollController;
+  final VoidCallback onSearchAgain;
 
-  const _Body({required this.controller, required this.scrollController});
+  const _Body({
+    required this.controller,
+    required this.scrollController,
+    required this.onSearchAgain,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -194,7 +240,10 @@ class _Body extends StatelessWidget {
       case ViewStatus.error:
         return ErrorResultsView(onRetry: controller.retry);
       case ViewStatus.empty:
-        return EmptyResultsView(onGoBack: () => Navigator.of(context).maybePop());
+        return EmptyResultsView(
+          onSearchAgain: onSearchAgain,
+          onGoBack: () => Navigator.of(context).maybePop(),
+        );
       case ViewStatus.loaded:
         return ListView.separated(
           controller: scrollController,

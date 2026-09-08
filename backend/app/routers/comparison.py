@@ -5,7 +5,7 @@ from app.core.database import get_db
 from app.schemas.price import CompareResponse
 from app.services import product_service
 
-router = APIRouter(prefix="/api/products", tags=["comparison"])
+router = APIRouter(prefix="/api/v1/products", tags=["comparison"])
 
 
 @router.get("/{product_id}/compare", response_model=CompareResponse)

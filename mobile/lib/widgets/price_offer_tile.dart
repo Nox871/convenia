@@ -7,7 +7,8 @@ import 'supermarket_badge.dart';
 
 /// Fila de una oferta dentro de la lista "todas las ofertas" del detalle.
 /// `isBest` resalta visualmente la oferta ganadora (verde), igual que en las
-/// tarjetas de resultados.
+/// tarjetas de resultados. Cuando la oferta no tiene datos (`!offer.hasData`)
+/// se muestra "Sin datos" en vez de un precio — nunca $0.
 class PriceOfferTile extends StatelessWidget {
   final PriceOffer offer;
   final bool isBest;
@@ -16,12 +17,32 @@ class PriceOfferTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (!offer.hasData) {
+      return Container(
+        padding: const EdgeInsets.all(AppSpacing.md),
+        decoration: BoxDecoration(
+          color: AppColors.mist,
+          borderRadius: BorderRadius.circular(AppSpacing.cardRadius),
+          border: Border.all(color: AppColors.mist),
+        ),
+        child: Row(
+          children: [
+            SupermarketBadge(code: offer.supermarketCode, name: offer.supermarketName),
+            const SizedBox(width: AppSpacing.md),
+            Expanded(
+              child: Text('Sin datos', style: AppText.caption),
+            ),
+          ],
+        ),
+      );
+    }
+
     return Container(
       padding: const EdgeInsets.all(AppSpacing.md),
       decoration: BoxDecoration(
-        color: isBest ? AppColors.bestPriceSurface : AppColors.white,
+        color: isBest ? AppColors.successSurface : AppColors.white,
         borderRadius: BorderRadius.circular(AppSpacing.cardRadius),
-        border: Border.all(color: isBest ? AppColors.bestPriceBorder : AppColors.slate100),
+        border: Border.all(color: isBest ? AppColors.successBorder : AppColors.mist),
       ),
       child: Row(
         children: [
@@ -31,11 +52,27 @@ class PriceOfferTile extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'Observado el ${_formatDate(offer.observedAt)}',
-                  style: AppText.caption,
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        'Observado el ${_formatDate(offer.observedAt!)}',
+                        style: AppText.caption,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (offer.isStale) ...[
+                      const SizedBox(width: 4),
+                      const Icon(Icons.schedule_rounded, size: 12, color: AppColors.inkFaint),
+                    ],
+                  ],
                 ),
-                if (!offer.available)
+                if (offer.isStale)
+                  const Text(
+                    'Dato desactualizado',
+                    style: TextStyle(fontSize: 11, color: AppColors.inkFaint),
+                  ),
+                if (offer.available == false)
                   const Text(
                     'No disponible actualmente',
                     style: TextStyle(fontSize: 11, color: AppColors.error),
@@ -47,17 +84,22 @@ class PriceOfferTile extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text(
-                formatCop(offer.price),
+                formatCop(offer.price!),
                 style: AppText.priceCard.copyWith(
-                  color: isBest ? AppColors.bestPriceDark : AppColors.brandDark,
+                  color: isBest ? AppColors.success : AppColors.ink,
                 ),
               ),
-              if (offer.listPrice != null && offer.listPrice! > offer.price)
+              if (offer.unitPrice != null && offer.unitLabel != null)
+                Text(
+                  '${formatCop(offer.unitPrice!)} ${offer.unitLabel}',
+                  style: AppText.caption,
+                ),
+              if (offer.listPrice != null && offer.listPrice! > offer.price!)
                 Text(
                   formatCop(offer.listPrice!),
                   style: const TextStyle(
                     fontSize: 12,
-                    color: AppColors.slate400,
+                    color: AppColors.inkFaint,
                     decoration: TextDecoration.lineThrough,
                   ),
                 ),
@@ -65,7 +107,7 @@ class PriceOfferTile extends StatelessWidget {
           ),
           if (isBest) ...[
             const SizedBox(width: AppSpacing.sm),
-            const Icon(Icons.check_circle_rounded, color: AppColors.bestPriceGreen, size: 18),
+            const Icon(Icons.check_circle_rounded, color: AppColors.success, size: 18),
           ],
         ],
       ),

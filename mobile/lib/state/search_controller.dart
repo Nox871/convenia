@@ -5,36 +5,24 @@ import '../models/product_list_item.dart';
 import '../repositories/product_repository.dart';
 import 'view_status.dart';
 
-/// Filtro de la pantalla de Resultados. Se traduce 1:1 al parámetro
-/// `supermarket` real del backend — nunca es un filtro inventado en cliente.
-enum SupermarketFilter { all, d1, exito }
+/// Criterio de orden de Resultados (estilo Google Flights: pocos criterios
+/// claros, nunca una lista fija de supermercados). `distance` existe en el
+/// enum pero el backend no lo soporta todavía (no hay `physical_stores`
+/// reales) -- se deja definido para activarlo sin romper el contrato de la
+/// UI el día que haya datos, pero la UI nunca debe ofrecerlo mientras tanto.
+enum ResultsSort { price, recent }
 
-extension SupermarketFilterCode on SupermarketFilter {
-  String? get apiCode {
-    switch (this) {
-      case SupermarketFilter.all:
-        return null;
-      case SupermarketFilter.d1:
-        return 'D1';
-      case SupermarketFilter.exito:
-        return 'EXITO';
-    }
-  }
+extension ResultsSortCode on ResultsSort {
+  String get apiValue => switch (this) { ResultsSort.price => 'price', ResultsSort.recent => 'recent' };
 
-  String get label {
-    switch (this) {
-      case SupermarketFilter.all:
-        return 'Todos';
-      case SupermarketFilter.d1:
-        return 'Mejor en D1';
-      case SupermarketFilter.exito:
-        return 'Mejor en Éxito';
-    }
-  }
+  String get label => switch (this) {
+    ResultsSort.price => 'Menor precio',
+    ResultsSort.recent => 'Más reciente',
+  };
 }
 
-/// Estado y lógica de la pantalla de Resultados: búsqueda, filtro y
-/// paginación real contra `GET /api/products`. Los widgets solo leen este
+/// Estado y lógica de la pantalla de Resultados: búsqueda, orden y
+/// paginación real contra `GET /api/v1/products`. Los widgets solo leen este
 /// controller y disparan sus métodos; no hacen HTTP directamente.
 class SearchResultsController extends ChangeNotifier {
   final ProductRepository _repository;
@@ -48,7 +36,8 @@ class SearchResultsController extends ChangeNotifier {
   static const _pageSize = 20;
 
   String _query;
-  SupermarketFilter _filter = SupermarketFilter.all;
+  ResultsSort _sort = ResultsSort.price;
+  String? _supermarketFilter; // filtro avanzado oculto, null = todos
   ViewStatus status = ViewStatus.loading;
   String? errorMessage;
 
@@ -59,7 +48,8 @@ class SearchResultsController extends ChangeNotifier {
   bool _isLoadingMore = false;
 
   String get query => _query;
-  SupermarketFilter get filter => _filter;
+  ResultsSort get sort => _sort;
+  String? get supermarketFilter => _supermarketFilter;
   List<ProductListItem> get items => List.unmodifiable(_items);
   int get total => _total;
   bool get isLoadingMore => _isLoadingMore;
@@ -71,9 +61,15 @@ class SearchResultsController extends ChangeNotifier {
     await _load();
   }
 
-  Future<void> setFilter(SupermarketFilter filter) async {
-    if (filter == _filter) return;
-    _filter = filter;
+  Future<void> setSort(ResultsSort sort) async {
+    if (sort == _sort) return;
+    _sort = sort;
+    await _load();
+  }
+
+  Future<void> setSupermarketFilter(String? code) async {
+    if (code == _supermarketFilter) return;
+    _supermarketFilter = code;
     await _load();
   }
 
@@ -87,7 +83,8 @@ class SearchResultsController extends ChangeNotifier {
     try {
       final response = await _repository.searchProducts(
         query: _query,
-        supermarket: _filter.apiCode,
+        supermarket: _supermarketFilter,
+        sort: _sort.apiValue,
         page: _page + 1,
         limit: _pageSize,
       );
@@ -110,7 +107,8 @@ class SearchResultsController extends ChangeNotifier {
     try {
       final response = await _repository.searchProducts(
         query: _query,
-        supermarket: _filter.apiCode,
+        supermarket: _supermarketFilter,
+        sort: _sort.apiValue,
         page: 1,
         limit: _pageSize,
       );

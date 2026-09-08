@@ -20,7 +20,7 @@ class ProductImage extends StatelessWidget {
       child: Container(
         width: size,
         height: size,
-        color: AppColors.slate50,
+        color: AppColors.softIvory,
         child: (url == null || url.isEmpty)
             ? _placeholder()
             : Image.network(
@@ -40,7 +40,7 @@ class ProductImage extends StatelessWidget {
     return Center(
       child: Icon(
         loading ? Icons.image_outlined : Icons.shopping_bag_outlined,
-        color: AppColors.slate400,
+        color: AppColors.inkFaint,
         size: size * 0.4,
       ),
     );
