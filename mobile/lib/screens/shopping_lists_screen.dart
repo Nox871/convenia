@@ -2,19 +2,20 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/theme.dart';
+import '../state/auth_controller.dart';
 import '../state/shopping_lists_controller.dart';
 import '../state/view_status.dart';
 import '../widgets/state_views.dart';
 import 'shopping_list_detail_screen.dart';
 
-/// Pantalla "Listas" (ERS §16/§23.6).
 class ShoppingListsScreen extends StatelessWidget {
   const ShoppingListsScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return ChangeNotifierProvider(
-      create: (_) => ShoppingListsController(),
+    return ChangeNotifierProxyProvider<AuthController, ShoppingListsController>(
+      create: (context) => ShoppingListsController(accountId: context.read<AuthController>().currentUser?.id),
+      update: (_, auth, controller) => controller!..onAccountChanged(auth.currentUser?.id),
       child: Scaffold(
         appBar: AppBar(title: Text('Mis listas', style: AppText.screenTitle)),
         floatingActionButton: const _CreateListButton(),

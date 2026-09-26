@@ -1,15 +1,15 @@
 # Convenia — Backend API
 
-API REST del proyecto Convenia. Es el backend único que consumirán tanto la
-app móvil (prioridad actual) como, más adelante, el cliente web — ambos como
-clientes de la misma API.
+API REST del proyecto Convenia. Es el backend único que consume la app
+móvil (y, en el futuro, cualquier otro cliente).
 
 ## Stack
 
 - Python 3 + FastAPI
-- PostgreSQL (base `convenia` ya existente, esquema administrado fuera del backend)
-- SQLAlchemy Core (sin ORM: las consultas son SQL explícito en `app/repositories/`,
-  igual que en el ETL, para no duplicar la definición del esquema en dos sitios)
+- PostgreSQL (base `convenia`, esquema versionado en `database/migrations/`)
+- SQLAlchemy Core (sin ORM: las consultas son SQL explícito en
+  `app/repositories/`, igual que en el ETL, para no duplicar la definición
+  del esquema en dos sitios)
 - Pydantic / pydantic-settings
 
 ## Estructura
@@ -22,6 +22,7 @@ backend/
 │   │   ├── config.py          # Settings (lee el .env del proyecto)
 │   │   ├── database.py        # Engine SQLAlchemy + dependencia get_db()
 │   │   ├── exceptions.py      # Excepciones de dominio (InvalidParameterError, NotFoundError)
+│   │   ├── category_bucket.py # Puente al clasificador de categorías compartido
 │   │   └── product_ref.py     # Codifica/decodifica el id opaco de producto (ver abajo)
 │   ├── schemas/                # Modelos Pydantic de request/response
 │   ├── repositories/           # SQL parametrizado — única capa que toca la BD
@@ -31,44 +32,32 @@ backend/
 └── README.md
 ```
 
-Separación de capas: `routers` (HTTP) -> `services` (negocio) -> `repositories`
-(SQL). Los routers y schemas no cambian aunque cambie de dónde vienen los datos.
+Separación de capas: `routers` (HTTP) → `services` (negocio) →
+`repositories` (SQL). Los routers y schemas no cambian aunque cambie de
+dónde vienen los datos.
 
-## Decisión arquitectónica clave: id opaco de producto
+## Decisión arquitectónica: id opaco de producto
 
-Hoy `products` y `product_matches` están vacías porque la homologación entre
-supermercados todavía no corrió. Para no acoplar la API a `source_products`,
-cada producto se identifica con un id con prefijo:
+Cada producto se identifica con un id con prefijo, para que la API no
+dependa de si un producto ya está homologado entre supermercados o no:
 
-- `sp-123` -> `source_products.id = 123` (un producto de un solo supermercado, sin homologar)
-- `p-45` -> `products.id = 45` (producto canónico ya homologado, con 1+ supermercados)
+- `sp-123` → `source_products.id = 123` (un producto de un solo
+  supermercado, sin homologar).
+- `p-45` → `products.id = 45` (producto canónico ya homologado, con datos
+  de 2 o más supermercados).
 
-Así, `GET /api/products` hoy devuelve ids `sp-*` (uno por `source_product`,
-porque no hay matches confirmados). Cuando exista homologación, algunos
-productos empezarán a devolver ids `p-*` que agrupan varios supermercados —
-y `/api/products/{id}`, `/prices` y `/compare` seguirán funcionando igual,
-porque `app/repositories/product_repository.py` decide, según el prefijo, si
-lee de `source_products` o de `products` + `product_matches`. Sólo ese
-archivo necesita cambiar; no los endpoints.
+`GET /api/v1/products` devuelve ambos tipos combinados en un mismo
+listado: los homologados agrupados con su mejor precio, y los sueltos con
+el precio de su único supermercado. `/products/{id}`, `/prices` y
+`/compare` funcionan igual sin importar el prefijo:
+`app/repositories/product_repository.py` decide, según él, si lee de
+`source_products` o de `products` + `product_matches`.
 
 ## Configuración
 
 El backend reutiliza el **mismo `.env`** que usa el ETL, en la raíz del
-proyecto (`E:\convenia\.env`), con las variables:
-
-```
-DB_HOST=...
-DB_PORT=...
-DB_NAME=...
-DB_USER=...
-DB_PASSWORD=...
-```
-
-No se necesitan variables nuevas obligatorias. Opcionalmente:
-
-```
-BACKEND_CORS_ORIGINS=http://localhost:3000,http://localhost:19006
-```
+proyecto. Ver `.env.example` para la lista completa de variables y sus
+valores por defecto.
 
 ## Instalación
 
@@ -79,10 +68,10 @@ backend/.venv/Scripts/pip install -r backend/requirements.txt
 
 ## Ejecutar
 
-Desde la raíz del proyecto (`E:\convenia`):
+Desde `backend/`:
 
 ```bash
-backend/.venv/Scripts/python.exe -m uvicorn app.main:app --app-dir backend --reload --port 8000
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 - API: http://localhost:8000
@@ -91,30 +80,36 @@ backend/.venv/Scripts/python.exe -m uvicorn app.main:app --app-dir backend --rel
 
 ## Endpoints
 
-| Método | Ruta                              | Descripción                              |
-|--------|-----------------------------------|-------------------------------------------|
-| GET    | `/api/health`                     | Health check                              |
-| GET    | `/api/products`                   | Búsqueda/listado paginado de productos    |
-| GET    | `/api/products/{id}`              | Detalle de un producto                    |
-| GET    | `/api/products/{id}/prices`       | Ofertas de precio disponibles del producto|
-| GET    | `/api/products/{id}/compare`      | Comparación de ofertas + mejor precio     |
+Todos bajo `/api/v1/`, excepto el health check.
 
-`GET /api/products` acepta `q`, `supermarket`, `page` (default 1) y `limit`
-(default 20, máx. 100), y devuelve `items` + `pagination` (`total`,
-`total_pages`, `has_next`, `has_prev`).
+| Recurso | Endpoints |
+|---|---|
+| Sistema | `GET /api/health` |
+| Supermercados | `GET /supermarkets`, `GET /supermarkets/{id}` |
+| Categorías | `GET /categories` |
+| Productos | `GET /products` (`?q=&supermarket=&sort=&page=&limit=`), `GET /products/{id}` |
+| Precios | `GET /products/{id}/prices`, `GET /products/{id}/compare` |
+| Historial | `GET /products/{id}/history` (`?month=YYYY-MM`), `GET /products/{id}/history/monthly` |
+| Listas de compra | `GET/POST /lists`, `GET/PUT/DELETE /lists/{id}`, `POST /lists/{id}/items`, `PUT/DELETE /lists/{id}/items/{item_id}`, `GET /lists/{id}/cost`, `GET /lists/{id}/cost/distributed` |
+| Establecimientos | `GET /stores`, `GET /stores/nearby` (`?lat=&lon=&radius_km=`) |
+
+`GET /products` acepta `page` (default 1) y `limit` (default 20, máx.
+100), y devuelve `items` + `pagination` (`total`, `total_pages`,
+`has_next`, `has_prev`).
 
 ## Reglas de negocio aplicadas
 
 - Sólo se usan `price_observations` con `available = TRUE`.
 - El precio y la moneda nunca se inventan: si un producto no tiene precio
-  disponible, `offers` viene vacío y `best_price` es `null`.
-- `best_price` es el mínimo respetando moneda (hoy siempre COP en los datos
-  cargados).
-- Se distingue explícitamente `source_products.external_id` (id del
-  supermercado de origen, vive dentro de `raw_data`/no se expone como id de
-  producto) del id canónico de `products`.
+  disponible en un supermercado, ese campo viene `null`, nunca `0`.
+- El mejor precio es el mínimo respetando moneda.
+- `/compare` siempre devuelve una fila por cada supermercado activo,
+  tenga o no oferta para ese producto — el número de filas nunca se asume
+  fijo.
+- El costo de una lista sólo declara "conviene" al supermercado donde la
+  lista está completa; nunca compara un total parcial contra uno completo.
 
 ## No incluido en esta fase
 
-Autenticación, usuarios, pagos, OCR, IA/recomendaciones, carrito, rutas,
-integración con mapas, frontend. Se agregará en fases posteriores.
+Autenticación de usuarios, pagos, OCR de comprobantes, recomendaciones,
+carrito de compra.

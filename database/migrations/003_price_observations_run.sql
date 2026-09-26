@@ -1,6 +1,6 @@
--- Vincula cada observación de precio a la ejecución que la originó (RF-PRICE-002,
--- RN-016) y agrega un constraint único real que reemplaza el WHERE NOT EXISTS
--- aplicativo (ERS §29).
+-- Vincula cada observación de precio a la ejecución que la originó, y
+-- agrega un constraint único real que reemplaza el WHERE NOT EXISTS
+-- aplicativo.
 ALTER TABLE price_observations
     ADD COLUMN IF NOT EXISTS scraper_run_id INTEGER REFERENCES scraper_runs(id);
 -- NULLABLE a propósito: las filas históricas ya existentes no tienen un run

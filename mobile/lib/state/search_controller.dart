@@ -27,8 +27,9 @@ extension ResultsSortCode on ResultsSort {
 class SearchResultsController extends ChangeNotifier {
   final ProductRepository _repository;
 
-  SearchResultsController({required String query, ProductRepository? repository})
+  SearchResultsController({String query = '', String? category, ProductRepository? repository})
     : _query = query,
+      _category = category,
       _repository = repository ?? ProductRepository() {
     _load();
   }
@@ -36,6 +37,7 @@ class SearchResultsController extends ChangeNotifier {
   static const _pageSize = 20;
 
   String _query;
+  String? _category;
   ResultsSort _sort = ResultsSort.price;
   String? _supermarketFilter; // filtro avanzado oculto, null = todos
   ViewStatus status = ViewStatus.loading;
@@ -48,6 +50,7 @@ class SearchResultsController extends ChangeNotifier {
   bool _isLoadingMore = false;
 
   String get query => _query;
+  String? get category => _category;
   ResultsSort get sort => _sort;
   String? get supermarketFilter => _supermarketFilter;
   List<ProductListItem> get items => List.unmodifiable(_items);
@@ -55,9 +58,13 @@ class SearchResultsController extends ChangeNotifier {
   bool get isLoadingMore => _isLoadingMore;
   bool get hasNext => _hasNext;
 
+  /// Cambiar la búsqueda de texto siempre reemplaza el filtro de categoría
+  /// (son dos formas alternativas de llegar a Resultados, no combinables
+  /// desde este cuadro de edición).
   Future<void> updateQuery(String newQuery) async {
-    if (newQuery.trim() == _query.trim()) return;
+    if (newQuery.trim() == _query.trim() && _category == null) return;
     _query = newQuery;
+    _category = null;
     await _load();
   }
 
@@ -82,7 +89,8 @@ class SearchResultsController extends ChangeNotifier {
 
     try {
       final response = await _repository.searchProducts(
-        query: _query,
+        query: _category == null ? _query : null,
+        category: _category,
         supermarket: _supermarketFilter,
         sort: _sort.apiValue,
         page: _page + 1,
@@ -106,7 +114,8 @@ class SearchResultsController extends ChangeNotifier {
 
     try {
       final response = await _repository.searchProducts(
-        query: _query,
+        query: _category == null ? _query : null,
+        category: _category,
         supermarket: _supermarketFilter,
         sort: _sort.apiValue,
         page: 1,

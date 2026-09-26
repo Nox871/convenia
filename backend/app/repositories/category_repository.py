@@ -31,3 +31,21 @@ def list_categories_raw(conn: Connection) -> list[dict]:
         )
     ).mappings().all()
     return [dict(row) for row in rows]
+
+
+def list_active_products_with_category(conn: Connection) -> list[dict]:
+    """Un renglón por producto ACTIVE: su id, nombre, supermercado y el
+    pasillo (`source_categories.name_raw`) donde el supermercado lo puso."""
+    rows = conn.execute(
+        text(
+            """
+            SELECT sp.id, sp.name_raw AS name, sc.name_raw AS category_path,
+                   s.code AS supermarket_code
+            FROM source_products sp
+            JOIN supermarkets s ON s.id = sp.supermarket_id
+            LEFT JOIN source_categories sc ON sc.id = sp.source_category_id
+            WHERE sp.status = 'ACTIVE'
+            """
+        )
+    ).mappings().all()
+    return [dict(row) for row in rows]

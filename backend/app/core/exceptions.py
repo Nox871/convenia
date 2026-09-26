@@ -11,3 +11,15 @@ class InvalidParameterError(Exception):
 
 class NotFoundError(Exception):
     """Recurso solicitado no existe -> HTTP 404."""
+
+
+class ConflictError(Exception):
+    """El recurso ya existe (ej. correo ya registrado) -> HTTP 409."""
+
+
+class UnauthorizedError(Exception):
+    """Credenciales inválidas o token ausente/expirado -> HTTP 401."""
+
+
+class ForbiddenError(Exception):
+    """Identidad válida, pero sin permiso para esta acción -> HTTP 403."""

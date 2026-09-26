@@ -1,4 +1,4 @@
--- Ciclo de vida de producto (RF-LIFE-001..007, ERS §6).
+-- Ciclo de vida de producto.
 --
 -- IMPORTANTE: acoplado a un cambio obligatorio en etl/core.py
 -- (_upsert_source_product) que debe dejar de escribir la columna is_active

@@ -15,3 +15,11 @@ class ApiException implements Exception {
 class NotFoundException extends ApiException {
   const NotFoundException(super.message);
 }
+
+/// Caso especial de [ApiException]: el backend respondió 401 (token
+/// ausente, inválido o expirado, o credenciales incorrectas al iniciar
+/// sesión) -- se distingue del resto porque puede significar que la sesión
+/// ya no es válida y conviene cerrarla en la app.
+class UnauthorizedException extends ApiException {
+  const UnauthorizedException(super.message);
+}

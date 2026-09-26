@@ -6,8 +6,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.core.config import settings
-from app.core.exceptions import InvalidParameterError, NotFoundError
+from app.core.exceptions import (
+    ConflictError,
+    ForbiddenError,
+    InvalidParameterError,
+    NotFoundError,
+    UnauthorizedError,
+)
 from app.routers import (
+    admin_exports,
+    auth,
     categories,
     comparison,
     health,
@@ -35,7 +43,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -57,6 +65,21 @@ async def not_found_handler(request: Request, exc: NotFoundError):
     return JSONResponse(status_code=404, content={"detail": str(exc)})
 
 
+@app.exception_handler(ConflictError)
+async def conflict_handler(request: Request, exc: ConflictError):
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+@app.exception_handler(UnauthorizedError)
+async def unauthorized_handler(request: Request, exc: UnauthorizedError):
+    return JSONResponse(status_code=401, content={"detail": str(exc)})
+
+
+@app.exception_handler(ForbiddenError)
+async def forbidden_handler(request: Request, exc: ForbiddenError):
+    return JSONResponse(status_code=403, content={"detail": str(exc)})
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     logger.exception("Error interno no controlado en %s %s", request.method, request.url.path)
@@ -64,6 +87,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 
 app.include_router(health.router, prefix="/api")
+app.include_router(auth.router)
 app.include_router(products.router)
 app.include_router(prices.router)
 app.include_router(comparison.router)
@@ -72,3 +96,4 @@ app.include_router(supermarkets.router)
 app.include_router(categories.router)
 app.include_router(shopping_lists.router)
 app.include_router(stores.router)
+app.include_router(admin_exports.router)

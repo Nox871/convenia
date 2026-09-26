@@ -37,6 +37,19 @@ class Settings(BaseSettings):
     # lógica de negocio.
     walking_speed_kmh: float = 4.5
 
+    # Firma de los tokens de sesión (JWT). El valor por defecto sólo sirve
+    # para desarrollo local -- en cualquier ambiente real debe venir del
+    # .env con un valor propio, largo y secreto (nunca versionado).
+    jwt_secret_key: str = "dev-secret-cambiar-en-produccion"
+    jwt_algorithm: str = "HS256"
+    jwt_expiration_hours: int = 24 * 30  # 30 días
+
+    # Client ID de tipo "Aplicación web" creado en Google Cloud Console --
+    # es el "audience" que se exige al validar el token de Google Sign-In,
+    # tanto si el usuario inició sesión desde la app Android como si algún
+    # día se agrega un cliente web (mismo backend, un solo Client ID).
+    google_web_client_id: str = ""
+
     @property
     def database_url(self) -> str:
         return (

@@ -115,7 +115,7 @@ class SupermarketETL:
 
     def _average_historical_products(self, conn, supermarket_id: int) -> float | None:
         """Promedio de products_detected de los últimos 5 runs válidos, usado
-        como referencia para el chequeo de calidad mínima (sección 31)."""
+        como referencia para el chequeo de calidad mínima."""
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -430,8 +430,8 @@ class SupermarketETL:
             supermarket_id = self._get_supermarket_id(conn)
             self.run_id = self._create_run(conn, supermarket_id, started_at, str(raw_path))
 
-            # Sección 31: protección contra ejecuciones con muy pocos productos
-            # (scraping roto) — no debe interpretarse como descontinuación masiva.
+            # Protección contra ejecuciones con muy pocos productos (scraping
+            # roto) — no debe interpretarse como descontinuación masiva.
             promedio_historico = self._average_historical_products(conn, supermarket_id)
             if promedio_historico and len(products) < promedio_historico * MIN_PRODUCTS_RATIO_VS_HISTORY:
                 mensaje = (

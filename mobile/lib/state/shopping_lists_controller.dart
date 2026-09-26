@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import '../core/api_exception.dart';
@@ -6,14 +8,26 @@ import '../models/shopping_list.dart';
 import '../repositories/shopping_list_repository.dart';
 import 'view_status.dart';
 
-/// Estado de la pantalla "Listas" (ERS §16/§23.6): listado de las listas del
-/// dispositivo actual.
+/// Estado de la pantalla "Listas": las de la cuenta si hay sesión iniciada; si
+/// no, las del dispositivo.
 class ShoppingListsController extends ChangeNotifier {
   final ShoppingListRepository _repository;
 
-  ShoppingListsController({ShoppingListRepository? repository})
-    : _repository = repository ?? ShoppingListRepository() {
+  ShoppingListsController({ShoppingListRepository? repository, int? accountId})
+    : _repository = repository ?? ShoppingListRepository(),
+      _accountId = accountId {
     _load();
+  }
+
+  /// Cuenta cuyas listas se muestran (`null` = invitado, listas del dispositivo).
+  int? _accountId;
+
+  /// Al iniciar o cerrar sesión, las listas visibles cambian: se recargan.
+  void onAccountChanged(int? accountId) {
+    if (accountId == _accountId) return;
+    _accountId = accountId;
+    // Puede llegar durante la construcción de un widget.
+    scheduleMicrotask(_load);
   }
 
   ViewStatus status = ViewStatus.loading;

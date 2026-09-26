@@ -15,10 +15,12 @@ from datetime import datetime, timezone
 
 from sqlalchemy.engine import Connection
 
+from app.core.category_bucket import ETIQUETAS_AMIGABLES
 from app.core.config import settings
 from app.core.exceptions import InvalidParameterError, NotFoundError
 from app.core.product_ref import parse_product_ref
 from app.repositories import price_repository, product_repository
+from app.services import category_service
 from app.schemas.common import PageInfo
 from app.schemas.price import (
     CompareResponse,
@@ -30,7 +32,13 @@ from app.schemas.price import (
     ProductPricesResponse,
     ProductRef,
 )
-from app.schemas.product import ProductDetail, ProductListItem, ProductListResponse
+from app.schemas.product import (
+    ProductDetail,
+    ProductListItem,
+    ProductListResponse,
+    ProductSuggestResponse,
+    ProductSuggestion,
+)
 
 logger = logging.getLogger("app.services.product")
 
@@ -45,6 +53,8 @@ def list_products(
     sort: str,
     page: int,
     limit: int,
+    category: str | None = None,
+    supermarket_codes: list[str] | None = None,
 ) -> ProductListResponse:
     if page < 1:
         raise InvalidParameterError("'page' debe ser >= 1")
@@ -57,16 +67,59 @@ def list_products(
     if q == "":
         q = None
 
+    category_source_ids = None
+    if category:
+        label = category.strip()
+        if label not in ETIQUETAS_AMIGABLES.values():
+            raise InvalidParameterError(f"'category' desconocida: '{category}'")
+        category_source_ids = category_service.source_product_ids_for_label(conn, label)
+
     supermarket_code = supermarket.strip().upper() if supermarket else None
 
     offset = (page - 1) * limit
     items, total = product_repository.search_products_grouped(
-        conn, q=q, supermarket_code=supermarket_code, sort=sort, offset=offset, limit=limit
+        conn,
+        q=q,
+        category_source_ids=category_source_ids,
+        supermarket_codes=supermarket_codes,
+        supermarket_code=supermarket_code,
+        sort=sort,
+        offset=offset,
+        limit=limit,
     )
 
     return ProductListResponse(
         items=[ProductListItem(**item) for item in items],
         pagination=PageInfo.build(page=page, limit=limit, total=total),
+    )
+
+
+def suggest_products(
+    conn: Connection,
+    q: str,
+    limit: int,
+    prefer: str = "comparable",
+    supermarket_codes: list[str] | None = None,
+) -> ProductSuggestResponse:
+    """Sugerencias por similitud de texto, para entrada por voz/OCR o texto
+    con errores. No reemplaza la búsqueda normal (`list_products`): se usa
+    cuando el texto no es exacto y hace falta que el usuario confirme cuál
+    de varios parecidos es el producto real."""
+    q = q.strip()
+    if not q:
+        raise InvalidParameterError("'q' no puede estar vacío")
+    if limit < 1:
+        raise InvalidParameterError("'limit' debe ser >= 1")
+
+    if prefer not in ("comparable", "price"):
+        raise InvalidParameterError("'prefer' debe ser 'comparable' o 'price'")
+
+    rows = product_repository.search_products_fuzzy(
+        conn, q=q, limit=limit, prefer=prefer, supermarket_codes=supermarket_codes
+    )
+    return ProductSuggestResponse(
+        query=q,
+        suggestions=[ProductSuggestion(**row) for row in rows],
     )
 
 
@@ -84,18 +137,22 @@ def get_product_detail(conn: Connection, product_id_raw: str) -> ProductDetail:
     return ProductDetail(**data)
 
 
-def get_product_prices(conn: Connection, product_id_raw: str) -> ProductPricesResponse:
+def get_product_prices(
+    conn: Connection, product_id_raw: str, supermarket_codes: list[str] | None = None
+) -> ProductPricesResponse:
     ref = _parse_ref_or_400(product_id_raw)
     _ensure_product_exists(conn, ref, product_id_raw)
 
     source_product_ids = product_repository.resolve_source_product_ids(conn, ref)
-    offers_raw = price_repository.get_latest_offers(conn, source_product_ids)
+    offers_raw = price_repository.get_latest_offers(conn, source_product_ids, supermarket_codes)
 
     offers = [_to_price_offer(row) for row in offers_raw]
     return ProductPricesResponse(product_id=product_id_raw, offers=offers)
 
 
-def compare_product(conn: Connection, product_id_raw: str) -> CompareResponse:
+def compare_product(
+    conn: Connection, product_id_raw: str, supermarket_codes: list[str] | None = None
+) -> CompareResponse:
     ref = _parse_ref_or_400(product_id_raw)
 
     if ref.kind == "source":
@@ -109,7 +166,7 @@ def compare_product(conn: Connection, product_id_raw: str) -> CompareResponse:
     source_product_ids = product_repository.resolve_source_product_ids(conn, ref)
     # Una fila por CADA supermercado activo (no sólo los que tienen oferta),
     # y el número de filas nunca se asume fijo.
-    offers_raw = price_repository.get_offers_for_compare(conn, source_product_ids)
+    offers_raw = price_repository.get_offers_for_compare(conn, source_product_ids, supermarket_codes)
     offers = [_to_price_offer(row) for row in offers_raw]
 
     # Precio unitario: sólo cuando el producto es canónico y su

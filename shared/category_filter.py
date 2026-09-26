@@ -267,20 +267,20 @@ ETIQUETAS_AMIGABLES = {
     "snack": "Snacks", "pasaboca": "Snacks", "mecato": "Snacks",
     "papas fritas": "Snacks",
     # aseo del hogar (incluye el stem "hogar" -- ver nota en PALABRAS_INCLUSION)
-    "hogar": "Aseo del hogar", "aseo": "Aseo del hogar",
-    "papel higienico": "Aseo del hogar", "papel de cocina": "Aseo del hogar",
-    "servilleta": "Aseo del hogar", "detergente": "Aseo del hogar",
-    "suavizante": "Aseo del hogar", "jabon": "Aseo del hogar",
-    "lavaloza": "Aseo del hogar", "limpi": "Aseo del hogar",
-    "desinfect": "Aseo del hogar", "bolsas de basura": "Aseo del hogar",
-    "bolsa basura": "Aseo del hogar", "esponja": "Aseo del hogar",
-    "escoba": "Aseo del hogar", "trapero": "Aseo del hogar",
-    "ambientador": "Aseo del hogar", "blanqueador": "Aseo del hogar",
+    "hogar": "Aseo y cuidado personal", "aseo": "Aseo y cuidado personal",
+    "papel higienico": "Aseo y cuidado personal", "papel de cocina": "Aseo y cuidado personal",
+    "servilleta": "Aseo y cuidado personal", "detergente": "Aseo y cuidado personal",
+    "suavizante": "Aseo y cuidado personal", "jabon": "Aseo y cuidado personal",
+    "lavaloza": "Aseo y cuidado personal", "limpi": "Aseo y cuidado personal",
+    "desinfect": "Aseo y cuidado personal", "bolsas de basura": "Aseo y cuidado personal",
+    "bolsa basura": "Aseo y cuidado personal", "esponja": "Aseo y cuidado personal",
+    "escoba": "Aseo y cuidado personal", "trapero": "Aseo y cuidado personal",
+    "ambientador": "Aseo y cuidado personal", "blanqueador": "Aseo y cuidado personal",
     # cuidado personal
-    "cuidado personal": "Cuidado personal", "higiene personal": "Cuidado personal",
-    "shampoo": "Cuidado personal", "champu": "Cuidado personal",
-    "crema dental": "Cuidado personal", "cepillo dental": "Cuidado personal",
-    "desodorante": "Cuidado personal",
+    "cuidado personal": "Aseo y cuidado personal", "higiene personal": "Aseo y cuidado personal",
+    "shampoo": "Aseo y cuidado personal", "champu": "Aseo y cuidado personal",
+    "crema dental": "Aseo y cuidado personal", "cepillo dental": "Aseo y cuidado personal",
+    "desodorante": "Aseo y cuidado personal",
 }
 
 

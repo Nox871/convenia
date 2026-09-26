@@ -96,17 +96,15 @@ Solo se consideran `source_products` que **todavía no tienen fila en
 - Cada par nuevo homologado crea exactamente un `products` y dos
   `product_matches` (uno por lado), nunca más.
 
-## Limitación conocida (no resuelta en esta versión)
+## Enlace contra corridas anteriores (cross-run)
 
-Esta primera versión compara "`source_products` de D1 sin resolver" contra
-"`source_products` de Éxito sin resolver" **de la misma corrida**. Si en el
-futuro llega un producto nuevo de D1 cuyo equivalente en Éxito **ya** fue
-homologado en una corrida anterior, esta versión no lo intentará enlazar al
-`products.id` ya existente (ese candidato de Éxito ya no cuenta como "sin
-resolver"). La extensión natural es comparar también contra los `products`
-ya creados (usando su propio nombre/marca/cantidad) — no se implementó
-todavía para no construir esa capa antes de tener datos reales que
-confirmen cuántas coincidencias hay siquiera.
+Antes de agrupar los candidatos sin resolver entre sí, cada uno se intenta
+enlazar primero contra los `products` canónicos que ya existen en su mismo
+bucket de categoría, usando la misma función de comparación. Así, si un
+producto nuevo de D1 llega en esta corrida y su equivalente en Éxito ya fue
+homologado en una corrida anterior, se enlaza al `products.id` existente en
+vez de quedar suelto o crear un canónico duplicado. Sólo lo que no logra
+enlazarse a ningún canónico existente pasa al union-find de esta corrida.
 
 ## Frutas y verduras
 

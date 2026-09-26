@@ -5,7 +5,7 @@ import '../core/theme.dart';
 import '../models/price_offer.dart';
 import 'supermarket_badge.dart';
 
-/// Fila de una oferta dentro de la lista "todas las ofertas" del detalle.
+/// Fila de una oferta dentro de "Disponibilidad"/"Precios registrados" del detalle.
 /// `isBest` resalta visualmente la oferta ganadora (verde), igual que en las
 /// tarjetas de resultados. Cuando la oferta no tiene datos (`!offer.hasData`)
 /// se muestra "Sin datos" en vez de un precio — nunca $0.

@@ -1,5 +1,5 @@
--- Establecimientos físicos (ERS §17, §26.8). Schema listo para P1; sin endpoints
--- todavía.
+-- Establecimientos físicos. La API ya expone /api/v1/stores; esta tabla
+-- sigue vacía hasta que se cargue un proceso real de datos de tiendas.
 CREATE TABLE IF NOT EXISTS physical_stores (
     id BIGSERIAL PRIMARY KEY,
     supermarket_id INTEGER NOT NULL REFERENCES supermarkets(id),

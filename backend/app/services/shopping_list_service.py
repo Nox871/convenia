@@ -1,14 +1,20 @@
 """Lógica de negocio de listas de compra."""
 from __future__ import annotations
 
+import time
+
 from sqlalchemy.engine import Connection
 
 from app.core.exceptions import InvalidParameterError, NotFoundError
+from app.core.ownership import USER_PREFIX
 from app.core.product_ref import encode_canonical_ref, encode_source_ref, parse_product_ref
-from app.repositories import shopping_list_repository
+from app.core.swap_matching import Producto, es_mas_barato, puede_sustituir
+from app.repositories import price_repository, shopping_list_repository
 from app.schemas.shopping_list import (
     DistributedPlanItem,
     DistributedPlanStop,
+    ShoppingListBudget,
+    ShoppingListClaimResponse,
     ShoppingListCostResponse,
     ShoppingListDetail,
     ShoppingListDistributedResponse,
@@ -19,7 +25,20 @@ from app.schemas.shopping_list import (
     ShoppingListRename,
     ShoppingListSummary,
     SupermarketCost,
+    SwapAlternative,
+    SwapSuggestion,
+    SwapSuggestionsResponse,
 )
+
+
+def claim_device_lists(conn: Connection, device_ref: str, user_id: int) -> ShoppingListClaimResponse:
+    """Al iniciar sesión, las listas hechas como invitado en este dispositivo
+    pasan a la cuenta. Sólo se reclaman las de un identificador de dispositivo
+    (nunca las de otra cuenta)."""
+    if device_ref.startswith(USER_PREFIX):
+        raise InvalidParameterError("Identificador de dispositivo inválido")
+    claimed = shopping_list_repository.claim_device_lists(conn, device_ref, user_id)
+    return ShoppingListClaimResponse(claimed=claimed)
 
 
 def create_list(conn: Connection, owner_ref: str, name: str) -> ShoppingListDetail:
@@ -62,6 +81,7 @@ def get_list_detail(conn: Connection, list_id: int, owner_ref: str) -> ShoppingL
         name=list_row["name"],
         created_at=list_row["created_at"],
         updated_at=list_row["updated_at"],
+        budget=list_row.get("budget"),
         items=items,
     )
 
@@ -71,6 +91,15 @@ def rename_list(conn: Connection, list_id: int, owner_ref: str, payload: Shoppin
     if not name:
         raise InvalidParameterError("'name' no puede estar vacío")
     updated = shopping_list_repository.rename_list(conn, list_id, owner_ref, name)
+    if not updated:
+        raise NotFoundError(f"Lista '{list_id}' no existe")
+    return get_list_detail(conn, list_id, owner_ref)
+
+
+def set_budget(
+    conn: Connection, list_id: int, owner_ref: str, payload: ShoppingListBudget
+) -> ShoppingListDetail:
+    updated = shopping_list_repository.set_budget(conn, list_id, owner_ref, payload.budget)
     if not updated:
         raise NotFoundError(f"Lista '{list_id}' no existe")
     return get_list_detail(conn, list_id, owner_ref)
@@ -120,7 +149,9 @@ def delete_item(conn: Connection, list_id: int, item_id: int, owner_ref: str) ->
     return get_list_detail(conn, list_id, owner_ref)
 
 
-def get_cost(conn: Connection, list_id: int, owner_ref: str) -> ShoppingListCostResponse:
+def get_cost(
+    conn: Connection, list_id: int, owner_ref: str, supermarket_codes: list[str] | None = None
+) -> ShoppingListCostResponse:
     """Costo estimado de la lista en cada supermercado activo, y cuál
     conviene para comprarla COMPLETA.
 
@@ -131,7 +162,7 @@ def get_cost(conn: Connection, list_id: int, owner_ref: str) -> ShoppingListCost
     """
     _ensure_list_owned(conn, list_id, owner_ref)
 
-    filas = shopping_list_repository.get_cost_breakdown_rows(conn, list_id)
+    filas = shopping_list_repository.get_cost_breakdown_rows(conn, list_id, supermarket_codes)
     if not filas:
         return ShoppingListCostResponse(list_id=list_id, costs=[], best_supermarket_code=None)
 
@@ -175,7 +206,7 @@ def get_cost(conn: Connection, list_id: int, owner_ref: str) -> ShoppingListCost
 
 
 def get_distributed_plan(
-    conn: Connection, list_id: int, owner_ref: str
+    conn: Connection, list_id: int, owner_ref: str, supermarket_codes: list[str] | None = None
 ) -> ShoppingListDistributedResponse:
     """Plan de compra distribuida: para cada ítem, el supermercado con el
     precio más bajo disponible -- reutiliza el mismo desglose ítem-por-
@@ -186,7 +217,7 @@ def get_distributed_plan(
     items_raw = shopping_list_repository.get_items(conn, list_id)
     nombres_por_item = {row["id"]: row["name"] for row in items_raw}
 
-    filas = shopping_list_repository.get_cost_breakdown_rows(conn, list_id)
+    filas = shopping_list_repository.get_cost_breakdown_rows(conn, list_id, supermarket_codes)
 
     mejor_por_item: dict[int, dict] = {}
     for fila in filas:
@@ -252,3 +283,106 @@ def get_distributed_plan(
 def _ensure_list_owned(conn: Connection, list_id: int, owner_ref: str) -> None:
     if shopping_list_repository.get_list(conn, list_id, owner_ref) is None:
         raise NotFoundError(f"Lista '{list_id}' no existe")
+
+
+MAX_SWAP_SUGGESTIONS = 5
+
+# El índice de candidatos sólo cambia cuando corre el ETL (una vez al día): se
+# guarda en memoria unos minutos por conjunto de supermercados.
+_SWAP_CACHE_SECONDS = 300
+_swap_cache: dict[tuple | None, tuple[float, dict[str, list[tuple[dict, Producto]]]]] = {}
+
+
+def _swap_candidates(
+    conn: Connection, supermarket_codes: list[str] | None
+) -> dict[str, list[tuple[dict, Producto]]]:
+    """Productos con precio vigente, indexados por su primera palabra base, para
+    no comparar cada ítem contra todo el catálogo."""
+    key = None if supermarket_codes is None else tuple(sorted(supermarket_codes))
+    cached = _swap_cache.get(key)
+    if cached is not None and time.monotonic() - cached[0] < _SWAP_CACHE_SECONDS:
+        return cached[1]
+
+    por_primera_palabra: dict[str, list[tuple[dict, Producto]]] = {}
+    for oferta in price_repository.list_current_offers(conn, supermarket_codes):
+        producto = Producto(nombre=oferta["name"], marca=oferta["brand"])
+        base = producto.base
+        if base:
+            por_primera_palabra.setdefault(base[0], []).append((oferta, producto))
+    _swap_cache[key] = (time.monotonic(), por_primera_palabra)
+    return por_primera_palabra
+
+
+def get_swap_suggestions(
+    conn: Connection, list_id: int, owner_ref: str, supermarket_codes: list[str] | None = None
+) -> SwapSuggestionsResponse:
+    """Cambios que bajarían el costo de la lista: para cada ítem, un producto
+    del MISMO tipo y tamaño parecido que sea al menos 5 % más barato, entre los
+    supermercados al alcance. Nunca sugiere un producto de otra clase (ver
+    `app.core.swap_matching`), y no inventa nada: si no hay sustituto claro, el
+    ítem simplemente no aparece."""
+    _ensure_list_owned(conn, list_id, owner_ref)
+
+    items = shopping_list_repository.get_items(conn, list_id)
+    filas = shopping_list_repository.get_cost_breakdown_rows(conn, list_id, supermarket_codes)
+
+    # Mejor (más barato) precio actual de cada ítem entre los supermercados al alcance.
+    actual_por_item: dict[int, dict] = {}
+    for fila in filas:
+        if fila["price"] is None:
+            continue
+        precio = float(fila["price"])
+        previo = actual_por_item.get(fila["item_id"])
+        if previo is None or precio < previo["price"]:
+            actual_por_item[fila["item_id"]] = {"price": precio, "supermarket_name": fila["supermarket_name"]}
+
+    por_primera_palabra = _swap_candidates(conn, supermarket_codes)
+
+    sugerencias: list[SwapSuggestion] = []
+    for item in items:
+        actual = actual_por_item.get(item["id"])
+        if actual is None:
+            continue
+        original = Producto(nombre=item["name"], marca=item.get("brand"))
+        base = original.base
+        if not base:
+            continue
+
+        mejor: dict | None = None
+        for oferta, candidato in por_primera_palabra.get(base[0], []):
+            if not es_mas_barato(actual["price"], oferta["price"]):
+                continue
+            if not puede_sustituir(original, candidato):
+                continue
+            if mejor is None or oferta["price"] < mejor["price"]:
+                mejor = oferta
+        if mejor is None:
+            continue
+
+        sugerencias.append(
+            SwapSuggestion(
+                item_id=item["id"],
+                item_name=item["name"],
+                quantity=item["quantity"],
+                current_unit_price=actual["price"],
+                current_supermarket_name=actual["supermarket_name"],
+                alternative=SwapAlternative(
+                    product_id=encode_source_ref(mejor["source_product_id"]),
+                    name=mejor["name"],
+                    brand=mejor["brand"],
+                    image_url=mejor["image_url"],
+                    unit_price=mejor["price"],
+                    supermarket_code=mejor["supermarket_code"],
+                    supermarket_name=mejor["supermarket_name"],
+                ),
+                saving_total=round((actual["price"] - mejor["price"]) * item["quantity"], 2),
+            )
+        )
+
+    sugerencias.sort(key=lambda s: s.saving_total, reverse=True)
+    sugerencias = sugerencias[:MAX_SWAP_SUGGESTIONS]
+    return SwapSuggestionsResponse(
+        list_id=list_id,
+        suggestions=sugerencias,
+        total_saving=round(sum(s.saving_total for s in sugerencias), 2),
+    )

@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../core/theme.dart';
 import '../state/search_controller.dart';
 import '../state/view_status.dart';
+import '../widgets/scope_note.dart';
 import '../widgets/primary_search_field.dart';
 import '../widgets/product_card.dart';
 import '../widgets/quick_search_chip.dart';
@@ -12,13 +13,14 @@ import 'product_detail_screen.dart';
 
 class ResultsScreen extends StatelessWidget {
   final String query;
+  final String? category;
 
-  const ResultsScreen({super.key, required this.query});
+  const ResultsScreen({super.key, this.query = '', this.category});
 
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
-      create: (_) => SearchResultsController(query: query),
+      create: (_) => SearchResultsController(query: query, category: category),
       child: const _ResultsView(),
     );
   }
@@ -93,6 +95,8 @@ class _ResultsViewState extends State<_ResultsView> {
             const SizedBox(height: AppSpacing.sm),
             _SortBar(controller: controller),
             const SizedBox(height: AppSpacing.sm),
+            ScopeNote(onChanged: controller.retry),
+            const SizedBox(height: AppSpacing.sm),
             Expanded(
               child: _Body(
                 controller: controller,
@@ -163,9 +167,9 @@ class _Header extends StatelessWidget {
                 text: TextSpan(
                   style: AppText.body,
                   children: [
-                    const TextSpan(text: 'Buscaste: '),
+                    TextSpan(text: controller.category != null ? 'Categoría: ' : 'Buscaste: '),
                     TextSpan(
-                      text: '"${controller.query}"',
+                      text: '"${controller.category ?? controller.query}"',
                       style: const TextStyle(fontWeight: FontWeight.w700, color: AppColors.ink),
                     ),
                     TextSpan(text: '  ·  ${controller.total} productos encontrados'),

@@ -5,10 +5,9 @@ import '../models/supermarket.dart';
 import '../repositories/supermarket_repository.dart';
 import 'view_status.dart';
 
-/// Estado de la pantalla "Configuración" (ERS §23.8): fuente de datos y
-/// fecha de la última actualización exitosa de cada supermercado (sección
-/// 42: nunca se afirma que un precio es "actual" sin decir cuándo se
-/// observó por última vez).
+/// Estado de la pantalla "Configuración": fuente de datos y fecha de la
+/// última actualización exitosa de cada supermercado -- nunca se afirma
+/// que un precio es "actual" sin decir cuándo se observó por última vez.
 class SettingsController extends ChangeNotifier {
   final SupermarketRepository _repository;
 

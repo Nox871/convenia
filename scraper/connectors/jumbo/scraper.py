@@ -92,7 +92,7 @@ except ZoneInfoNotFoundError:
 # parents:
 #   jumbo -> connectors
 #   connectors -> scraper
-#   scraper -> prezio
+#   scraper -> convenia
 #
 # parents[3] = raíz del proyecto
 
@@ -3085,7 +3085,7 @@ async def main():
     print("=" * 60)
 
     print(
-        "PREZIO - SCRAPER JUMBO"
+        "convenia - SCRAPER JUMBO"
     )
 
     print("=" * 60)

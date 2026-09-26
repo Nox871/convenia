@@ -1,0 +1,11 @@
+[Unit]
+Description=Convenia - corrida diaria (scrapers, ETL y homologacion)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=conve-admin
+ExecStart=/bin/bash /home/conve-admin/convenia/deploy/run_daily.sh
+TimeoutStartSec=12h
+Nice=10

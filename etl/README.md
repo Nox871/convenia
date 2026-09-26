@@ -3,9 +3,9 @@
 `RAW → ETL → source_products/price_observations → homologación →
 products/product_matches`
 
-## Ciclo de vida y ejecuciones (ERS v2.0)
+## Ciclo de vida y ejecuciones
 
-Cada corrida de `etl.etl_<código>` ahora:
+Cada corrida de `etl.etl_<código>`:
 
 - Registra un `scraper_runs` (id, inicio/fin, estado, conteos) — ver
   `etl/core.py: _create_run/_finish_run`.
@@ -27,43 +27,39 @@ bucket antes de compararlo con otros no resueltos, así que un producto
 homologado en una corrida anterior no genera un canónico duplicado cuando
 aparece su par en otro supermercado más adelante.
 
-## Estado actual (pendiente de ejecución manual)
+## Estado actual de los datos
 
-> **Ningún proceso de ETL ni de homologación se deja corriendo ni se
-> programa automáticamente.** Esta etapa quedó con el código implementado,
-> compilando y probado con datos sintéticos/parciales; la ejecución sobre
-> el volumen completo de datos reales (una vez el scraping de Éxito se
-> corra manualmente) queda a cargo de quien opere el proyecto.
+D1, Éxito y Carulla ya tienen datos reales cargados; Jumbo y Olímpica
+tienen su conector implementado (`scraper/connectors/jumbo`,
+`scraper/connectors/olimpica`) pero todavía no se han ejecutado en este
+ambiente:
 
-Estado real de la base de datos al día de hoy:
+| Tabla | D1 | Éxito | Carulla | Jumbo | Olímpica |
+|---|---|---|---|---|---|
+| `source_products` | 208 | 1386 | 1026 | 0 | 0 |
 
-| Tabla | D1 | Éxito | Total |
-|---|---|---|---|
-| `source_categories` | 7 | 0 | 7 |
-| `source_products` | 206 | 0 | 206 |
-| `price_observations` | 276 | 0 | 276 |
-| `products` | — | — | 0 |
-| `product_matches` | — | — | 0 |
+`products` (canónico) tiene 556 filas y `product_matches` 1117 (1028
+`CONFIRMED`, 89 `REVIEW`), generadas al correr la homologación sobre los
+tres supermercados con datos. Ese número crecerá cada vez que se vuelva a
+correr `etl.homologacion.run` después de cargar más datos (incluidos
+Jumbo y Olímpica cuando se ejecuten).
 
-`products`/`product_matches` siguen en 0 porque Éxito todavía no tiene
-`source_products` cargados (su scraping está pendiente de ejecución
-manual, ver `scraper/README.md`) — la homologación necesita datos de
-**ambos** supermercados para poder cruzar algo. Correrla hoy contra solo
-D1 no generaría ningún match real.
-
-## Cómo ejecutar (manual, cuando corresponda)
+## Cómo ejecutar
 
 Con el venv del scraper (tiene `psycopg2`/`python-dotenv`), desde
 `E:\convenia`:
 
 ```bash
-# 1. ETL (requiere haber corrido antes los scrapers correspondientes)
+# 1. ETL (requiere haber corrido antes el scraper correspondiente)
 scraper/.venv/Scripts/python.exe -m etl.etl_d1
 scraper/.venv/Scripts/python.exe -m etl.etl_exito
-# o ambos:
+scraper/.venv/Scripts/python.exe -m etl.etl_carulla
+scraper/.venv/Scripts/python.exe -m etl.etl_jumbo
+scraper/.venv/Scripts/python.exe -m etl.etl_olimpica
+# o todos:
 scraper/.venv/Scripts/python.exe -m etl.run_etl ALL
 
-# 2. Homologación (requiere source_products de D1 Y Éxito)
+# 2. Homologación (usa los source_products de todos los supermercados con datos)
 scraper/.venv/Scripts/python.exe -m etl.homologacion.run
 ```
 
@@ -73,22 +69,24 @@ categorías, productos, precios ni matches (ver `etl/core.py` y
 
 ## Módulos
 
-- `etl/etl_d1.py`, `etl/etl_exito.py`, `etl/run_etl.py` — carga de RAW a
-  `source_products`/`price_observations`. Sin cambios de lógica en esta
-  etapa de homologación (solo se usaron para cargar los datos de D1 ya
-  filtrados a canasta familiar).
-- `etl/homologacion/` — módulo nuevo e independiente. Ver su propio
+- `etl/etl_d1.py`, `etl/etl_exito.py`, `etl/etl_carulla.py`,
+  `etl/etl_jumbo.py`, `etl/etl_olimpica.py`, `etl/run_etl.py` — carga de
+  RAW a `source_products`/`price_observations`, compartiendo la misma
+  lógica de `etl/core.py`.
+- `etl/homologacion/` — módulo independiente del ETL. Ver su propio
   `README.md` para el diseño completo: normalización, señales de
   comparación, umbrales `CONFIRMED`/`REVIEW`, por qué no genera
   `REJECTED` en masa, e idempotencia.
 
-## Validado (sin ejecutar contra el dataset completo)
+## Verificado
 
-- `etl.etl_d1` corrido dos veces sobre el mismo RAW: segunda corrida =
-  0 insertados, 0 categorías nuevas, todos los precios detectados como
-  duplicados (idempotencia confirmada).
-- `etl.homologacion.matcher` probado con casos sintéticos representativos:
-  mismo producto/marca/cantidad → `CONFIRMED`; mismo nombre pero marca
-  distinta → descartado; productos frescos sin marca con nombre o
-  cantidad distintos → descartado. No se ejecutó todavía sobre el
-  dataset real completo (falta Éxito).
+- Cada `etl.etl_<código>` corrido más de una vez sobre el mismo RAW: la
+  segunda corrida no inserta duplicados ni genera observaciones de precio
+  repetidas (idempotencia confirmada).
+- `etl.homologacion.matcher` probado con casos representativos: mismo
+  producto/marca/cantidad → `CONFIRMED`; mismo nombre pero marca distinta
+  → descartado; productos frescos sin marca con nombre o cantidad
+  distintos → descartado.
+- `etl.homologacion.run` corrido contra los datos reales de D1, Éxito y
+  Carulla: 0 grupos que mezclen dos `source_products` del mismo
+  supermercado (verificable con `python -m etl.homologacion.verificar_grupos`).

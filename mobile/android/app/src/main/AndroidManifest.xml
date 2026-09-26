@@ -1,12 +1,20 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- Requerido para que la app llame a la API REST del backend. -->
     <uses-permission android:name="android.permission.INTERNET"/>
-    <!-- Establecimientos cercanos (ERS §17/RF-STORE-001): la ubicación es
-         opcional (RF-STORE-002), estos permisos sólo se solicitan en tiempo
-         de ejecución cuando el usuario abre "Establecimientos"; la app sigue
-         funcionando por completo si los rechaza. -->
+    <!-- Establecimientos cercanos: la ubicación es opcional, estos permisos
+         sólo se solicitan en tiempo de ejecución cuando el usuario abre
+         "Establecimientos"; la app sigue funcionando por completo si los
+         rechaza. -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <!-- Búsqueda por voz al agregar productos a una lista: se solicita en
+         tiempo de ejecución solo cuando el usuario toca el botón de
+         micrófono; si lo rechaza, sigue pudiendo buscar escribiendo. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <!-- Tomar una foto de una lista para reconocer sus productos por OCR;
+         solo se pide al elegir "tomar foto" (elegir de galería no la
+         necesita). -->
+    <uses-permission android:name="android.permission.CAMERA"/>
     <application
         android:label="convenia_mobile"
         android:name="${applicationName}"
@@ -46,6 +54,17 @@
 
          In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin. -->
     <queries>
+        <!-- Búsqueda por voz: desde Android 11 hay que declarar que la app consulta
+             servicios de reconocimiento de voz; sin esto `speech_to_text` no
+             encuentra ninguno y la voz queda "no disponible". -->
+        <intent>
+            <action android:name="android.speech.RecognitionService"/>
+        </intent>
+        <!-- "Cómo llegar": abrir la ruta en la app de mapas del teléfono. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="https"/>
+        </intent>
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>

@@ -1,5 +1,5 @@
--- Completa `supermarkets` con los campos que pide el ERS §26.1 (hoy la tabla sólo
--- tiene id/code/name).
+-- Agrega a `supermarkets` la URL del sitio, la moneda, si está activo y
+-- cuándo se creó el registro.
 ALTER TABLE supermarkets
     ADD COLUMN IF NOT EXISTS website_url TEXT,
     ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAULT 'COP',

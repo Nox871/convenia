@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../core/theme.dart';
 import '../state/product_detail_controller.dart';
 import '../state/view_status.dart';
+import '../widgets/scope_note.dart';
 import '../widgets/comparison_banner.dart';
 import '../widgets/price_offer_tile.dart';
 import '../widgets/add_to_list_sheet.dart';
@@ -103,7 +104,9 @@ class _DetailBody extends StatelessWidget {
                   ),
                 ],
               ),
-              const SizedBox(height: AppSpacing.xl),
+              const SizedBox(height: AppSpacing.lg),
+              ScopeNote(padded: false, onChanged: controller.retry),
+              const SizedBox(height: AppSpacing.lg),
               ComparisonBanner(
                 offers: comparison.offers,
                 bestPrice: comparison.bestPrice,

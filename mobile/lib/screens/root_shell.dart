@@ -2,14 +2,14 @@ import 'package:flutter/material.dart';
 
 import '../core/theme.dart';
 import 'home_screen.dart';
-import 'settings_screen.dart';
+import 'profile_screen.dart';
 import 'shopping_lists_screen.dart';
 import 'stores_screen.dart';
 
-/// Shell de navegación principal (ERS §23: Inicio, Listas, Establecimientos,
-/// Configuración como accesos permanentes; Búsqueda/Resultados/Detalle/
+/// Shell de navegación principal: Inicio, Listas, Tiendas y
+/// Perfil son accesos permanentes; Búsqueda/Resultados/Detalle/
 /// Comparación/Historial se alcanzan empujando pantallas desde Inicio o
-/// Resultados, no como pestañas propias).
+/// Resultados, no como pestañas propias.
 ///
 /// Cada pestaña se construye SOLO la primera vez que se selecciona (no con
 /// `IndexedStack`, que montaría las 4 de una y dispararía sus llamadas HTTP
@@ -30,7 +30,7 @@ class _RootShellState extends State<RootShell> {
     HomeScreen(),
     ShoppingListsScreen(),
     StoresScreen(),
-    SettingsScreen(),
+    ProfileScreen(),
   ];
 
   @override
@@ -61,8 +61,8 @@ class _RootShellState extends State<RootShell> {
             label: 'Tiendas',
           ),
           NavigationDestination(
-            icon: Icon(Icons.settings_outlined),
-            label: 'Config',
+            icon: Icon(Icons.person_outline_rounded),
+            label: 'Perfil',
           ),
         ],
       ),

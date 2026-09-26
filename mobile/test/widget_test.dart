@@ -7,11 +7,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:convenia_mobile/main.dart';
 
 void main() {
-  testWidgets('Home muestra el logo, el título y el buscador', (WidgetTester tester) async {
+  testWidgets('Home muestra el logo, el saludo y el buscador', (WidgetTester tester) async {
     await tester.pumpWidget(const ConveniaApp());
 
     expect(find.text('Convenia'), findsOneWidget);
-    expect(find.text('Encuentra dónde te conviene comprar'), findsOneWidget);
+    // El saludo depende de la hora del día (ver `_greeting()` en
+    // home_screen.dart) -- se verifica el patrón, no un texto fijo.
+    expect(
+      find.textContaining(RegExp(r'^Buenos días|^Buenas tardes|^Buenas noches')),
+      findsOneWidget,
+    );
     expect(find.text('¿Qué producto estás buscando?'), findsOneWidget);
     expect(find.text('Buscar'), findsOneWidget);
 

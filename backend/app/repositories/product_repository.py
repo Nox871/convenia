@@ -1,10 +1,12 @@
 """Acceso a datos de productos."""
 from __future__ import annotations
 
+
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from app.core.category_bucket import etiqueta_amigable
+from app.core.category_bucket import categoria_de_producto
+from app.core.scope import sql_scope_clause
 from app.core.product_ref import ProductRef, encode_source_ref
 
 
@@ -104,6 +106,8 @@ def search_products_grouped(
     sort: str,
     offset: int,
     limit: int,
+    category_source_ids: list[int] | None = None,
+    supermarket_codes: list[str] | None = None,
 ) -> tuple[list[dict], int]:
     """Búsqueda paginada que agrupa por producto canónico cuando hay
     homologación confirmada; los productos sin match confirmado se listan
@@ -115,7 +119,12 @@ def search_products_grouped(
     """
     canon_filters = ["pm.status = 'CONFIRMED'"]
     suelto_filters = ["pm.id IS NULL", "sp.is_active = TRUE"]
-    params: dict = {"offset": offset, "limit": limit}
+    params: dict = {"offset": offset, "limit": limit, "sm_codes": supermarket_codes}
+    sm_best, sm_cnt, sm_sp = (
+        sql_scope_clause("sp", supermarket_codes),
+        sql_scope_clause("sp2", supermarket_codes),
+        sql_scope_clause("sp", supermarket_codes),
+    )
 
     if q:
         params["q_pattern"] = f"%{q}%"
@@ -139,6 +148,26 @@ def search_products_grouped(
         suelto_filters.append("s.code = :supermarket_code")
     else:
         canon_supermarket_exists = ""
+
+    # Filtro por categoría: recibe los ids de los productos de supermercado
+    # que `category_service` clasificó en la etiqueta pedida (por nombre de
+    # producto, con el pasillo como respaldo), la misma clasificación que
+    # cuenta `/categories`.
+    canon_category_exists = ""
+    suelto_category_join = ""
+    suelto_category_filter = ""
+    if category_source_ids is not None:
+        params["category_source_ids"] = category_source_ids
+        canon_category_exists = """
+            AND EXISTS (
+                SELECT 1 FROM product_matches pm4
+                JOIN source_products sp4 ON sp4.id = pm4.source_product_id
+                WHERE pm4.product_id = p.id AND pm4.status = 'CONFIRMED'
+                  AND sp4.id = ANY(:category_source_ids)
+            )
+        """
+        suelto_category_join = ""
+        suelto_category_filter = "AND sp.id = ANY(:category_source_ids)"
 
     order_by = "observed_at DESC NULLS LAST" if sort == "recent" else "price IS NULL, price ASC"
 
@@ -164,7 +193,7 @@ def search_products_grouped(
                         ORDER BY observed_at DESC
                         LIMIT 1
                     ) po ON TRUE
-                    WHERE pm.product_id = p.id AND pm.status = 'CONFIRMED'
+                    WHERE pm.product_id = p.id AND pm.status = 'CONFIRMED' {sm_best}
                     ORDER BY po.price ASC
                     LIMIT 1
                 ) best ON TRUE
@@ -172,13 +201,13 @@ def search_products_grouped(
                     SELECT COUNT(DISTINCT sp2.supermarket_id) AS offers_count
                     FROM product_matches pm2
                     JOIN source_products sp2 ON sp2.id = pm2.source_product_id
-                    WHERE pm2.product_id = p.id AND pm2.status = 'CONFIRMED'
+                    WHERE pm2.product_id = p.id AND pm2.status = 'CONFIRMED' {sm_cnt}
                       AND EXISTS (
                           SELECT 1 FROM price_observations po3
                           WHERE po3.source_product_id = sp2.id AND po3.available = TRUE
                       )
                 ) cnt ON TRUE
-                WHERE TRUE {canon_extra_q} {canon_supermarket_exists}
+                WHERE TRUE {canon_extra_q} {canon_supermarket_exists} {canon_category_exists}
             ),
             sueltos AS (
                 SELECT
@@ -188,6 +217,7 @@ def search_products_grouped(
                 FROM source_products sp
                 JOIN supermarkets s ON s.id = sp.supermarket_id
                 LEFT JOIN product_matches pm ON pm.source_product_id = sp.id AND pm.status = 'CONFIRMED'
+                {suelto_category_join}
                 LEFT JOIN LATERAL (
                     SELECT price, list_price, currency, observed_at
                     FROM price_observations
@@ -195,7 +225,7 @@ def search_products_grouped(
                     ORDER BY observed_at DESC
                     LIMIT 1
                 ) lp ON TRUE
-                WHERE {suelto_where} {suelto_extra_q}
+                WHERE {suelto_where} {suelto_extra_q} {suelto_category_filter} {sm_sp}
             ),
             combinado AS (
                 SELECT 'p-' || product_id::text AS id, name, brand, image_url,
@@ -266,7 +296,7 @@ def get_source_product_detail(conn: Connection, source_product_id: int) -> dict 
         # Etiqueta amigable ("Frutas y verduras"), nunca la ruta cruda
         # (source_categories.name_raw, ej. "/Despensa/Granos/Arroz/") -- si
         # no hay bucket reconocible, se omite en vez de mostrar algo técnico.
-        "category": etiqueta_amigable(row["category_name"]),
+        "category": categoria_de_producto(row["name_raw"], row["category_name"]),
         "image_url": row["image_url"],
         "product_url": row["product_url"],
         "is_matched": False,
@@ -300,12 +330,34 @@ def get_canonical_product_detail(conn: Connection, product_id: int) -> dict | No
 
     supermarket_codes = [m["supermarket_code"] for m in matches]
 
+    # Un producto homologado no tiene foto propia: se usa la de su mejor
+    # oferta que tenga imagen (primero las que tienen foto, luego menor precio).
+    image = conn.execute(
+        text(
+            """
+            SELECT sp.image_url
+            FROM product_matches pm
+            JOIN source_products sp ON sp.id = pm.source_product_id
+            LEFT JOIN LATERAL (
+                SELECT price FROM price_observations
+                WHERE source_product_id = sp.id AND available = TRUE
+                ORDER BY observed_at DESC LIMIT 1
+            ) po ON TRUE
+            WHERE pm.product_id = :id AND pm.status = 'CONFIRMED'
+              AND sp.image_url IS NOT NULL AND sp.image_url <> ''
+            ORDER BY po.price ASC NULLS LAST
+            LIMIT 1
+            """
+        ),
+        {"id": product_id},
+    ).scalar()
+
     return {
         "id": f"p-{product['id']}",
         "name": product["name"],
         "brand": product["brand"],
-        "category": etiqueta_amigable(product["category"]),
-        "image_url": None,
+        "category": categoria_de_producto(product["name"], product["category"]),
+        "image_url": image,
         "product_url": None,
         "is_matched": True,
         "offers_count": len(supermarket_codes),
@@ -347,3 +399,146 @@ def resolve_source_product_ids(conn: Connection, ref: ProductRef) -> list[int]:
         {"product_id": ref.numeric_id},
     ).all()
     return [row[0] for row in rows]
+
+
+def search_products_fuzzy(
+    conn: Connection,
+    q: str,
+    limit: int,
+    prefer: str = "comparable",
+    supermarket_codes: list[str] | None = None,
+) -> list[dict]:
+    """Productos cuyo nombre se PARECE a `q`, para cuando el texto no es
+    exacto (entrada por voz, texto extraído por OCR, o errores de tipeo) o
+    es genérico ("arroz", "leche").
+
+    Compara palabra por palabra usando distancia de edición (Levenshtein),
+    no el nombre completo de una sola vez: "aroz" tiene una similitud baja
+    contra "Arroz Diana 500 G" completo (por la marca y la cantidad), pero
+    muy alta contra la palabra "Arroz" sola. Cada palabra del texto
+    buscado debe tener una palabra parecida en el nombre del producto
+    (`MIN` de los mejores puntajes por palabra). `unaccent` evita que una
+    tilde parta una palabra en dos al compararla.
+
+    Orden (lo que decide cuál se propone primero cuando el texto es
+    genérico y muchos productos empatan en similitud):
+      1. Nombres que EMPIEZAN con lo pedido antes que los que solo lo
+         mencionan de pasada ("Sal REFISAL" antes que "Mantequilla sin sal").
+      2. Similitud (redondeada a 1 decimal, para que un empate práctico no
+         se rompa por centésimas).
+      3. `prefer='comparable'` (defecto): más supermercados que lo venden
+         primero -- es el único criterio que permite comparar de verdad --
+         y luego menor precio. `prefer='price'`: menor precio primero.
+    Sólo se devuelven productos con al menos un precio disponible. Nunca se
+    agrega uno automáticamente: el usuario confirma en la pantalla de
+    revisión.
+    """
+    if prefer == "price":
+        order_by = "tier ASC, ROUND(score::numeric, 1) DESC, price ASC, offers_count DESC, name ASC"
+    else:
+        order_by = "tier ASC, ROUND(score::numeric, 1) DESC, offers_count DESC, price ASC, name ASC"
+
+    sm_best, sm_cnt, sm_sp = (
+        sql_scope_clause("sp", supermarket_codes),
+        sql_scope_clause("sp2", supermarket_codes),
+        sql_scope_clause("sp", supermarket_codes),
+    )
+    rows = conn.execute(
+        text(
+            f"""
+            WITH query_words AS (
+                SELECT word
+                FROM unnest(regexp_split_to_array(lower(unaccent(:q)), '[^a-z0-9]+')) AS word
+                WHERE length(word) > 1
+            ),
+            candidatos AS (
+                SELECT 'p-' || p.id AS id, p.name, p.brand,
+                       best.image_url, best.price, cnt.offers_count
+                FROM products p
+                JOIN LATERAL (
+                    SELECT sp.image_url, po.price
+                    FROM product_matches pm
+                    JOIN source_products sp ON sp.id = pm.source_product_id
+                    JOIN LATERAL (
+                        SELECT price FROM price_observations
+                        WHERE source_product_id = sp.id AND available = TRUE
+                        ORDER BY observed_at DESC LIMIT 1
+                    ) po ON TRUE
+                    WHERE pm.product_id = p.id AND pm.status = 'CONFIRMED' {sm_best}
+                    ORDER BY po.price ASC
+                    LIMIT 1
+                ) best ON TRUE
+                JOIN LATERAL (
+                    SELECT COUNT(DISTINCT sp2.supermarket_id) AS offers_count
+                    FROM product_matches pm2
+                    JOIN source_products sp2 ON sp2.id = pm2.source_product_id
+                    WHERE pm2.product_id = p.id AND pm2.status = 'CONFIRMED' {sm_cnt}
+                      AND EXISTS (
+                          SELECT 1 FROM price_observations po3
+                          WHERE po3.source_product_id = sp2.id AND po3.available = TRUE
+                      )
+                ) cnt ON TRUE
+
+                UNION ALL
+
+                SELECT 'sp-' || sp.id AS id, sp.name_raw AS name, sp.brand_raw AS brand,
+                       sp.image_url, lp.price, 1 AS offers_count
+                FROM source_products sp
+                JOIN LATERAL (
+                    SELECT price FROM price_observations
+                    WHERE source_product_id = sp.id AND available = TRUE
+                    ORDER BY observed_at DESC LIMIT 1
+                ) lp ON TRUE
+                WHERE sp.is_active = TRUE {sm_sp}
+                  AND NOT EXISTS (
+                      SELECT 1 FROM product_matches pm
+                      WHERE pm.source_product_id = sp.id AND pm.status = 'CONFIRMED'
+                  )
+            ),
+            candidate_words AS (
+                SELECT c.id, word AS cword, pos
+                FROM candidatos c,
+                     unnest(regexp_split_to_array(lower(unaccent(c.name)), '[^a-z0-9]+'))
+                         WITH ORDINALITY AS t(word, pos)
+                WHERE length(word) > 1
+            ),
+            puntajes_por_palabra AS (
+                SELECT cw.id, qw.word AS qword,
+                       MAX(
+                           1.0 - levenshtein(qw.word, cw.cword)::float
+                               / GREATEST(length(qw.word), length(cw.cword))
+                       ) AS best_score
+                FROM query_words qw
+                JOIN candidate_words cw ON true
+                GROUP BY cw.id, qw.word
+            ),
+            puntaje AS (
+                SELECT id, MIN(best_score) AS score
+                FROM puntajes_por_palabra
+                GROUP BY id
+                HAVING MIN(best_score) >= 0.55
+            ),
+            primera_palabra AS (
+                SELECT cw.id,
+                       MAX(
+                           1.0 - levenshtein(qw.word, cw.cword)::float
+                               / GREATEST(length(qw.word), length(cw.cword))
+                       ) AS first_sim
+                FROM query_words qw
+                JOIN candidate_words cw ON cw.pos = 1
+                GROUP BY cw.id
+            )
+            SELECT c.id, c.name, c.brand, c.image_url,
+                   c.price::float AS price, c.offers_count::int AS offers_count,
+                   pu.score,
+                   CASE WHEN pp.first_sim >= 0.8 THEN 0 ELSE 1 END AS tier
+            FROM puntaje pu
+            JOIN candidatos c ON c.id = pu.id
+            LEFT JOIN primera_palabra pp ON pp.id = pu.id
+            ORDER BY {order_by}
+            LIMIT :limit
+            """
+        ),
+        {"q": q, "limit": limit, "sm_codes": supermarket_codes},
+    ).mappings().all()
+    return [dict(row) for row in rows]

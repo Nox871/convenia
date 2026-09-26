@@ -12,6 +12,21 @@ class ShoppingListRename(BaseModel):
     name: str
 
 
+class ShoppingListClaim(BaseModel):
+    owner_ref: str = Field(..., description="Identificador del dispositivo cuyas listas pasan a la cuenta")
+
+
+class ShoppingListClaimResponse(BaseModel):
+    claimed: int
+
+
+class ShoppingListBudget(BaseModel):
+    budget: int | None = Field(
+        None, ge=0, le=1_000_000_000,
+        description="Presupuesto en pesos; null lo quita",
+    )
+
+
 class ShoppingListItemCreate(BaseModel):
     product_id: str | None = Field(
         None, description="ID opaco 'p-<id>' o 'sp-<id>' del producto a agregar"
@@ -44,6 +59,7 @@ class ShoppingListSummary(BaseModel):
     created_at: datetime
     updated_at: datetime
     items_count: int
+    budget: int | None = None
 
 
 class ShoppingListListResponse(BaseModel):
@@ -55,6 +71,7 @@ class ShoppingListDetail(BaseModel):
     name: str
     created_at: datetime
     updated_at: datetime
+    budget: int | None = None
     items: list[ShoppingListItem]
 
 
@@ -106,3 +123,29 @@ class ShoppingListDistributedResponse(BaseModel):
         default_factory=list,
         description="Ítems sin precio en NINGÚN supermercado -- nunca se fuerzan a $0",
     )
+
+
+class SwapAlternative(BaseModel):
+    product_id: str = Field(..., description="ID opaco del producto sustituto ('sp-<id>')")
+    name: str
+    brand: str | None = None
+    image_url: str | None = None
+    unit_price: float
+    supermarket_code: str
+    supermarket_name: str
+
+
+class SwapSuggestion(BaseModel):
+    item_id: int
+    item_name: str
+    quantity: int
+    current_unit_price: float = Field(..., description="Mejor precio actual del ítem en los supermercados al alcance")
+    current_supermarket_name: str
+    alternative: SwapAlternative
+    saving_total: float = Field(..., description="Ahorro estimado al cambiar, multiplicado por la cantidad")
+
+
+class SwapSuggestionsResponse(BaseModel):
+    list_id: int
+    suggestions: list[SwapSuggestion]
+    total_saving: float

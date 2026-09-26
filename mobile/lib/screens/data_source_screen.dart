@@ -5,30 +5,29 @@ import '../core/theme.dart';
 import '../models/supermarket.dart';
 import '../state/settings_controller.dart';
 import '../state/view_status.dart';
-import '../widgets/convenia_logo.dart';
 import '../widgets/state_views.dart';
 
-/// Pantalla "Configuración" (ERS §23.8): información de la app y fuente de
-/// datos, incluida la fecha de la última actualización de cada supermercado
-/// (sección 42 — nunca se presenta un dato desactualizado como si fuera
-/// actual sin decir cuándo se observó).
-class SettingsScreen extends StatelessWidget {
-  const SettingsScreen({super.key});
+/// Fuente de los datos y fecha de la última actualización de cada
+/// supermercado -- nunca se presenta un dato desactualizado como si fuera
+/// actual sin decir cuándo se observó. Vive en su propia pantalla porque es
+/// información de referencia, no algo que el usuario consulte a diario.
+class DataSourceScreen extends StatelessWidget {
+  const DataSourceScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
       create: (_) => SettingsController(),
       child: Scaffold(
-        appBar: AppBar(title: Text('Configuración', style: AppText.screenTitle)),
-        body: const SafeArea(child: _SettingsBody()),
+        appBar: AppBar(title: Text('Fuente de datos', style: AppText.screenTitle)),
+        body: const SafeArea(child: _DataSourceBody()),
       ),
     );
   }
 }
 
-class _SettingsBody extends StatelessWidget {
-  const _SettingsBody();
+class _DataSourceBody extends StatelessWidget {
+  const _DataSourceBody();
 
   @override
   Widget build(BuildContext context) {
@@ -37,15 +36,6 @@ class _SettingsBody extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(AppSpacing.horizontalPage),
       children: [
-        const ConveniaWordmark(),
-        const SizedBox(height: AppSpacing.xs),
-        const Text(
-          'Antes de comprar, elige dónde.',
-          style: TextStyle(fontSize: 13, fontStyle: FontStyle.italic, color: AppColors.inkMuted),
-        ),
-        const SizedBox(height: AppSpacing.xxl),
-        const Text('FUENTE DE DATOS', style: _sectionLabel),
-        const SizedBox(height: AppSpacing.sm),
         Text(
           'Convenia obtiene precios directamente de los sitios públicos de cada '
           'supermercado mediante procesos automatizados. Cada precio mostrado '
@@ -53,13 +43,9 @@ class _SettingsBody extends StatelessWidget {
           style: AppText.body,
         ),
         const SizedBox(height: AppSpacing.xl),
-        const Text('ÚLTIMA ACTUALIZACIÓN POR SUPERMERCADO', style: _sectionLabel),
+        Text('ÚLTIMA ACTUALIZACIÓN POR SUPERMERCADO', style: AppText.caption),
         const SizedBox(height: AppSpacing.sm),
         _buildSupermarketsList(controller),
-        const SizedBox(height: AppSpacing.xxl),
-        const Text('ACERCA DE', style: _sectionLabel),
-        const SizedBox(height: AppSpacing.sm),
-        Text('Convenia — versión 0.1.0', style: AppText.body),
       ],
     );
   }
@@ -82,13 +68,6 @@ class _SettingsBody extends StatelessWidget {
     }
   }
 }
-
-const _sectionLabel = TextStyle(
-  fontSize: 12,
-  fontWeight: FontWeight.w700,
-  color: AppColors.inkFaint,
-  letterSpacing: 0.6,
-);
 
 class _SupermarketRow extends StatelessWidget {
   final Supermarket supermarket;

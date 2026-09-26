@@ -35,6 +35,7 @@ class ShoppingListSummary {
   final DateTime createdAt;
   final DateTime updatedAt;
   final int itemsCount;
+  final int? budget;
 
   const ShoppingListSummary({
     required this.id,
@@ -42,6 +43,7 @@ class ShoppingListSummary {
     required this.createdAt,
     required this.updatedAt,
     required this.itemsCount,
+    this.budget,
   });
 
   factory ShoppingListSummary.fromJson(Map<String, dynamic> json) {
@@ -51,6 +53,7 @@ class ShoppingListSummary {
       createdAt: DateTime.parse(json['created_at'] as String),
       updatedAt: DateTime.parse(json['updated_at'] as String),
       itemsCount: json['items_count'] as int,
+      budget: json['budget'] as int?,
     );
   }
 }
@@ -61,6 +64,7 @@ class ShoppingListDetail {
   final String name;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final int? budget;
   final List<ShoppingListItem> items;
 
   const ShoppingListDetail({
@@ -69,6 +73,7 @@ class ShoppingListDetail {
     required this.createdAt,
     required this.updatedAt,
     required this.items,
+    this.budget,
   });
 
   factory ShoppingListDetail.fromJson(Map<String, dynamic> json) {
@@ -77,6 +82,7 @@ class ShoppingListDetail {
       name: json['name'] as String,
       createdAt: DateTime.parse(json['created_at'] as String),
       updatedAt: DateTime.parse(json['updated_at'] as String),
+      budget: json['budget'] as int?,
       items: (json['items'] as List<dynamic>)
           .map((e) => ShoppingListItem.fromJson(e as Map<String, dynamic>))
           .toList(),

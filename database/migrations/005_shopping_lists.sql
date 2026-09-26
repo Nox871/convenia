@@ -1,4 +1,4 @@
--- Listas de compra (ERS §16, §26.9). Schema listo para P1; sin endpoints todavía.
+-- Listas de compra. La API ya expone /api/v1/lists con todo el CRUD.
 --
 -- Sin sistema de autenticación hoy: owner_ref identifica al dueño de la lista
 -- mediante un id de dispositivo generado por la app móvil (no un FK a una

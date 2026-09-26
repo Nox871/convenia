@@ -2,11 +2,11 @@ from pydantic import BaseModel, Field
 
 
 class Category(BaseModel):
-    bucket: str = Field(..., description="Categoría común normalizada (ej. 'lacte', 'verdur')")
-    products_count: int = Field(..., description="Productos activos en esta categoría común")
+    label: str = Field(..., description="Etiqueta legible (ej. 'Lácteos y huevos') -- también el valor a pasar como filtro ?category= al buscar productos")
+    products_count: int = Field(..., description="Productos activos en esta categoría")
     supermarkets: list[str] = Field(
         default_factory=list,
-        description="Códigos de supermercados que tienen al menos una categoría de origen en este bucket",
+        description="Códigos de supermercados que tienen al menos un producto en esta categoría",
     )
 
 

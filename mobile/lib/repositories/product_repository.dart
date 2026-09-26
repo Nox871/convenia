@@ -4,6 +4,7 @@ import '../models/price_history_response.dart';
 import '../models/product_detail.dart';
 import '../models/product_list_response.dart';
 import '../models/product_prices_response.dart';
+import '../models/product_suggestion.dart';
 import '../services/api_client.dart';
 
 /// Única puerta de entrada a los datos de producto para el resto de la app.
@@ -18,6 +19,7 @@ class ProductRepository {
 
   Future<ProductListResponse> searchProducts({
     String? query,
+    String? category,
     String? supermarket,
     String sort = 'price',
     int page = 1,
@@ -25,6 +27,7 @@ class ProductRepository {
   }) async {
     final params = <String, String>{'page': '$page', 'limit': '$limit', 'sort': sort};
     if (query != null && query.trim().isNotEmpty) params['q'] = query.trim();
+    if (category != null && category.isNotEmpty) params['category'] = category;
     if (supermarket != null && supermarket.isNotEmpty) params['supermarket'] = supermarket;
 
     final json = await _client.getJson('/api/v1/products', queryParameters: params);
@@ -64,5 +67,20 @@ class ProductRepository {
   Future<PriceHistoryMonthlyResponse> getPriceHistoryMonthly(String productId) async {
     final json = await _client.getJson('/api/v1/products/$productId/history/monthly');
     return PriceHistoryMonthlyResponse.fromJson(json);
+  }
+
+  /// Sugerencias por similitud de texto (voz, OCR, o texto con errores) --
+  /// nunca se usa para agregar un producto directamente, sólo para mostrar
+  /// candidatos que el usuario debe confirmar.
+  Future<ProductSuggestResponse> suggestProducts(
+    String query, {
+    int limit = 5,
+    String prefer = 'comparable',
+  }) async {
+    final json = await _client.getJson(
+      '/api/v1/products/suggest',
+      queryParameters: {'q': query, 'limit': '$limit', 'prefer': prefer},
+    );
+    return ProductSuggestResponse.fromJson(json);
   }
 }

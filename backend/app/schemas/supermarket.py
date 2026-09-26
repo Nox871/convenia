@@ -12,7 +12,7 @@ class Supermarket(BaseModel):
     is_active: bool
     created_at: datetime
     last_successful_run_at: datetime | None = Field(
-        None, description="Fecha/hora de la última ejecución de scraping exitosa (sección 42)"
+        None, description="Fecha/hora de la última ejecución de scraping exitosa"
     )
 
 

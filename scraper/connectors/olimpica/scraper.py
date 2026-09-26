@@ -89,9 +89,9 @@ except ZoneInfoNotFoundError:
 # parents:
 #   olimpica -> connectors
 #   connectors -> scraper
-#   scraper -> prezio
+#   scraper -> convenia
 #
-# parents[3] = E:\prezio
+# parents[3] = E:\convenia
 
 BASE_PROYECTO = Path(__file__).resolve().parents[3]
 
@@ -1528,7 +1528,7 @@ async def main():
 
     print()
     print("=" * 60)
-    print("PREZIO - SCRAPER OLIMPICA")
+    print("convenia - SCRAPER OLIMPICA")
     print("=" * 60)
     print(f"Inicio extracción: {extraction_started_at}")
     print(f"URL inicial: {DOMINIO_BASE}")

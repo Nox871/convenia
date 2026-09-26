@@ -1,0 +1,9 @@
+[Unit]
+Description=Convenia - corrida diaria a las 00:00 (hora local del servidor)
+
+[Timer]
+OnCalendar=*-*-* 00:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

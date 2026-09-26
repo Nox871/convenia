@@ -10,8 +10,8 @@ import '../state/price_history_monthly_controller.dart';
 import '../state/view_status.dart';
 import '../widgets/state_views.dart';
 
-/// Pantalla "Historial" (ERS §15, §23.5) -- resumen mensual con barras
-/// verticales (altura ∝ precio promedio del mes) y drill-down al tocar un
+/// Pantalla "Historial" -- resumen mensual con barras verticales (altura ∝
+/// precio promedio del mes) y drill-down al tocar un
 /// mes. Responde "¿qué tan normal es el precio actual?": el mes vigente se
 /// resalta contra los demás y se anota si está por encima o por debajo del
 /// promedio de los meses anteriores. Meses sin observaciones simplemente no

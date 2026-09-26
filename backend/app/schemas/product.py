@@ -41,3 +41,18 @@ class ProductDetail(BaseModel):
     supermarkets: list[str] = Field(
         default_factory=list, description="Códigos de los supermercados que ofrecen este producto"
     )
+
+
+class ProductSuggestion(BaseModel):
+    id: str = Field(..., description="ID opaco del producto ('p-<id>' o 'sp-<id>')")
+    name: str
+    brand: str | None = None
+    score: float = Field(..., description="Qué tan parecido es el nombre al texto buscado (0-1)")
+    image_url: str | None = None
+    price: float | None = Field(None, description="Mejor precio disponible hoy")
+    offers_count: int = Field(1, description="Supermercados que lo venden con precio disponible")
+
+
+class ProductSuggestResponse(BaseModel):
+    query: str
+    suggestions: list[ProductSuggestion]

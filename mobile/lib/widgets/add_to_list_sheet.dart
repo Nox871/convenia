@@ -4,9 +4,11 @@ import '../core/device_id.dart';
 import '../core/theme.dart';
 import '../models/shopping_list.dart';
 import '../repositories/shopping_list_repository.dart';
+import '../screens/shopping_list_detail_screen.dart';
 
 /// Bottom sheet para agregar `productId` a una lista existente o a una
-/// nueva. Se usa desde la pantalla de Detalle/Comparación.
+/// nueva. Se usa desde la pantalla de Detalle/Comparación. Al terminar deja
+/// un aviso temporal que dice a qué lista se agregó y ofrece ir a verla.
 Future<void> showAddToListSheet(BuildContext context, String productId) async {
   await showModalBottomSheet(
     context: context,
@@ -45,24 +47,34 @@ class _AddToListSheetState extends State<_AddToListSheet> {
     }
   }
 
-  Future<void> _addTo(int listId) async {
+  Future<void> _addTo(int listId, String listName) async {
+    // Se guardan antes de cerrar la hoja: después de `pop` ya no hay
+    // contexto de la hoja desde el cual buscarlos.
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+
     setState(() => _busy = true);
     final ownerRef = await DeviceId.get();
     try {
       await _repository.addItem(listId, ownerRef, widget.productId);
-      if (mounted) {
-        Navigator.of(context).pop();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Agregado a la lista.')),
-        );
-      }
+      navigator.pop();
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Agregado a «$listName»'),
+          duration: const Duration(seconds: 5),
+          action: SnackBarAction(
+            label: 'Ver lista',
+            onPressed: () => navigator.push(
+              MaterialPageRoute(builder: (_) => ShoppingListDetailScreen(listId: listId)),
+            ),
+          ),
+        ),
+      );
     } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No pudimos agregarlo. Intenta de nuevo.')),
-        );
-      }
-    } finally {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('No pudimos agregarlo. Intenta de nuevo.')),
+      );
       if (mounted) setState(() => _busy = false);
     }
   }
@@ -91,7 +103,7 @@ class _AddToListSheetState extends State<_AddToListSheet> {
     setState(() => _busy = true);
     final ownerRef = await DeviceId.get();
     final created = await _repository.createList(ownerRef, name);
-    await _addTo(created.id);
+    await _addTo(created.id, created.name);
   }
 
   @override
@@ -121,7 +133,7 @@ class _AddToListSheetState extends State<_AddToListSheet> {
                   contentPadding: EdgeInsets.zero,
                   title: Text(list.name),
                   subtitle: Text('${list.itemsCount} productos'),
-                  onTap: _busy ? null : () => _addTo(list.id),
+                  onTap: _busy ? null : () => _addTo(list.id, list.name),
                 ),
               ),
             const Divider(),
