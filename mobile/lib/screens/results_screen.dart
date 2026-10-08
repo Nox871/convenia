@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/theme.dart';
+import '../state/coverage_controller.dart';
 import '../state/search_controller.dart';
 import '../state/view_status.dart';
 import '../widgets/scope_note.dart';
@@ -38,6 +39,7 @@ class _ResultsViewState extends State<_ResultsView> {
   late final TextEditingController _editController;
   final _editFocusNode = FocusNode();
   final _scrollController = ScrollController();
+  String? _scopeKey; // supermercados al alcance con los que se pidió la lista
 
   @override
   void initState() {
@@ -71,6 +73,21 @@ class _ResultsViewState extends State<_ResultsView> {
   Widget build(BuildContext context) {
     final controller = context.watch<SearchResultsController>();
 
+    // Si cambia el rango (por ejemplo desde Perfil) mientras esta lista sigue
+    // abierta, el aviso de arriba se actualiza solo y la lista quedaba con
+    // precios de otras tiendas: se vuelve a pedir.
+    final coverage = context.watch<CoverageController>();
+    final scopeKey = coverage.status == CoverageStatus.ready ? coverage.scope?.join(',') : null;
+    if (scopeKey != null && scopeKey != _scopeKey) {
+      final cambio = _scopeKey != null;
+      _scopeKey = scopeKey;
+      if (cambio) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) controller.retry();
+        });
+      }
+    }
+
     return Scaffold(
       body: SafeArea(
         child: Column(
@@ -97,6 +114,14 @@ class _ResultsViewState extends State<_ResultsView> {
             const SizedBox(height: AppSpacing.sm),
             ScopeNote(onChanged: controller.retry),
             const SizedBox(height: AppSpacing.sm),
+            if (controller.suggestion != null)
+              _DidYouMean(
+                suggestion: controller.suggestion!,
+                onTap: () {
+                  _editController.text = controller.suggestion!;
+                  controller.acceptSuggestion();
+                },
+              ),
             Expanded(
               child: _Body(
                 controller: controller,
@@ -209,16 +234,6 @@ class _SortBar extends StatelessWidget {
             ),
             const SizedBox(width: AppSpacing.sm),
           ],
-          Tooltip(
-            message: 'Actívalo dando permiso de ubicación y cuando tengamos '
-                'establecimientos físicos cerca de ti',
-            child: FilterChoiceChip(
-              label: 'Más cercano',
-              selected: false,
-              enabled: false,
-              onTap: () {},
-            ),
-          ),
         ],
       ),
     );
@@ -244,7 +259,13 @@ class _Body extends StatelessWidget {
       case ViewStatus.error:
         return ErrorResultsView(onRetry: controller.retry);
       case ViewStatus.empty:
+        final coverage = context.watch<CoverageController>();
+        final limitado = coverage.status == CoverageStatus.ready;
         return EmptyResultsView(
+          message: limitado
+              ? 'Puede que exista en tiendas más lejos de ${coverage.radiusKm.toStringAsFixed(0)} km. '
+                  'Prueba con otro nombre o amplía la distancia en el aviso de arriba.'
+              : 'Prueba con otro nombre o revisa cómo lo escribiste.',
           onSearchAgain: onSearchAgain,
           onGoBack: () => Navigator.of(context).maybePop(),
         );
@@ -279,5 +300,63 @@ class _Body extends StatelessWidget {
           },
         );
     }
+  }
+}
+
+
+/// "¿Quisiste decir Arroz?": aparece cuando la búsqueda dio pocos o ningún
+/// resultado y hay una corrección clara de ortografía.
+class _DidYouMean extends StatelessWidget {
+  final String suggestion;
+  final VoidCallback onTap;
+
+  const _DidYouMean({required this.suggestion, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final label = suggestion.isEmpty
+        ? suggestion
+        : '${suggestion[0].toUpperCase()}${suggestion.substring(1)}';
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.horizontalPage, 0, AppSpacing.horizontalPage, AppSpacing.sm),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppSpacing.cardRadius),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.md),
+          decoration: BoxDecoration(
+            color: AppColors.lavenderMist,
+            borderRadius: BorderRadius.circular(AppSpacing.cardRadius),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.spellcheck_rounded, color: AppColors.brandIndigo, size: 20),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: RichText(
+                  text: TextSpan(
+                    style: AppText.body,
+                    children: [
+                      const TextSpan(text: '¿Quizás quisiste decir '),
+                      TextSpan(
+                        text: label,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.brandIndigo,
+                        ),
+                      ),
+                      const TextSpan(text: '?'),
+                    ],
+                  ),
+                ),
+              ),
+              const Icon(Icons.chevron_right_rounded, color: AppColors.inkFaint),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }

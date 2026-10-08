@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     # para desarrollo local -- en cualquier ambiente real debe venir del
     # .env con un valor propio, largo y secreto (nunca versionado).
     jwt_secret_key: str = "dev-secret-cambiar-en-produccion"
+    # Correos que quedan como administradores al iniciar sesión, separados por
+    # comas (variable ADMIN_EMAILS del .env). Sólo SUBE de rol: quitar un correo
+    # de la lista no le quita el rol a quien ya lo tiene.
+    admin_emails: str = ""
     jwt_algorithm: str = "HS256"
     jwt_expiration_hours: int = 24 * 30  # 30 días
 

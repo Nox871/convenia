@@ -20,6 +20,9 @@ import re
 import unicodedata
 from functools import lru_cache
 
+from .category_filter import etiqueta_amigable
+from functools import lru_cache
+
 DESPENSA = "Despensa"
 PANADERIA = "Panadería y desayuno"
 BEBIDAS = "Bebidas"
@@ -34,6 +37,15 @@ PERSONAL = ASEO  # aseo del hogar y cuidado personal son una sola categoría
 # Frases que contradicen a la primera palabra. Se evalúan primero, en orden,
 # sobre el nombre normalizado (minúsculas, sin tildes ni signos).
 _FRASES: list[tuple[str, str]] = [
+    (r"^papas? .*\b(prefrit[ao]s?|pre fritas?|congelad[ao]s?)\b", CONGELADOS),
+    (r"^alimento .*\bpolvo\b", DESPENSA),
+    (r"^alimento (de )?(soya|almendras?|avena|toning)", DESPENSA),
+    (r"^crem a de coco|^crema (de )?coco", DESPENSA),
+    (r"^base (para )?(salsa|sopa|guiso)", DESPENSA),
+    (r"^kit refresc", DESPENSA),
+    (r"^tomates? en (pure|salsa|trozos)", DESPENSA),
+    (r"^barra (de )?(cereal|granola|proteina|con)", SNACKS),
+    (r"^mr\b", ASEO),
     (r"^leche de coco", DESPENSA),
     (r"^crema de coco", DESPENSA),
     (r"^crema de leche", LACTEOS),
@@ -54,10 +66,33 @@ _FRASES: list[tuple[str, str]] = [
     (r"^vinagre de limpieza", ASEO),
     (r"\bultralimp", ASEO),
     (r"^ajo (el rey|badia|speciaria|specia)", DESPENSA),
+    (r"^(refresco|bebida|mezcla|jugo)\b(?!.*\b(ml|lt|l|litros?)\b).*\b[0-9]+ ?(g|gr|grs|gramos)\b", DESPENSA),
+    (r"^mini chuzos", CARNES),
+    (r"^mini (viennoiseria|croissant|miti|ponque|ponques|donas?|pan|panes)", PANADERIA),
+    (r"^ajo \b.*\b(condimento|molido|polvo|granulado|sazonador|especias?|pasta|salsa)\b", DESPENSA),
 ]
 
+# Marcas y expresiones inequívocas: valen en CUALQUIER parte del nombre aunque la
+# primera palabra engañe ("MANZANA ... POSTOBON" es una gaseosa, no una fruta).
+_SENALES_FUERTES: list[tuple[str, str]] = [
+    (r"\b(postobon|coca cola|pepsi|sprite|fanta|colombiana|gaseosa|gatorade|powerade|red bull|monster)\b", BEBIDAS),
+    (r"\b(refresco|bebida|jugo|granizado|limonada)\b.*\bpolvo\b|\bpolvo\b.*\b(refresco|bebida|jugo|granizado)\b", DESPENSA),
+    (r"\b(el rey|badia|tricondor|alinoli|dona gallina|granaroma)\b", DESPENSA),
+    (r"\b(cheetos|doritos|chitos|todo rico|detodito|de todito|pringles|natuchips|takis|boliqueso|choclitos|popetas)\b", SNACKS),
+    (r"\b(bon bon bum|halls|mentos|trident)\b", SNACKS),
+]
+# Palabras que dicen qué es el producto, pero sólo se usan cuando la PRIMERA palabra
+# no lo dice ("Caramelos ..." sí; "Bebida de almendras" o "Jabón de almendra" no).
+_SENALES_SI_CABEZA_DESCONOCIDA: list[tuple[str, str]] = [
+    (r"\b(caramelo|caramelos|chicle|chicles|bombon|bombones|gomitas|gomas|paleta|paletas|chupeta|chupetas|chokis|masmelos|malvaviscos|crispetas|snack|snacks)\b", SNACKS),
+    (r"\bbolitas? de chocolate\b", SNACKS),
+    (r"\b(frutos secos|nueces|almendras?|pistachos?|maranon)\b", SNACKS),
+]
+_SENALES_FUERTES_C = [(re.compile(patron), categoria) for patron, categoria in _SENALES_FUERTES]
+_SENALES_SUAVES_C = [(re.compile(patron), categoria) for patron, categoria in _SENALES_SI_CABEZA_DESCONOCIDA]
+
 # Palabras de empaque que pueden encabezar un nombre sin decir qué es.
-_EMPAQUES = {"paquete", "pack", "combo", "tripack", "caja", "cubeta"}
+_EMPAQUES = {"paquete", "pack", "combo", "tripack", "caja", "cubeta", "bolsa"}
 
 # Primera palabra -> categoría.
 _CABEZA: dict[str, str] = {}
@@ -76,8 +111,8 @@ _registrar(DESPENSA, """
     sardinas saltinas
 """)
 _registrar(PANADERIA, """
-    cafe chocolate chocolates chocolatina cacao cocoa pan tostadas bocadillo
-    arequipe mermelada galleta galletas arepa arepas
+    cafe chocolate chocolates cacao cocoa pan tostadas bocadillo
+    arequipe mermelada arepa arepas
 """)
 _registrar(BEBIDAS, """
     gaseosa soda agua bebida refresco jugo jugos te malta nectar infusion
@@ -112,6 +147,30 @@ _registrar(ASEO, """
     desengrasante limpiavidrios ambientador guante guantes
 """)
 _registrar(PERSONAL, "cepillo maquina seda alcohol enjuague pomos")
+_registrar(ASEO, """
+    shampoo champu acondicionador desodorante limpia lava gel tratamiento cuchilla
+    protectores toallitas desinfectante esponjas esponjilla axion dove crema_
+""")
+_registrar(PANADERIA, "ponque ponques mogolla rapiditas brownie buenazo croissant")
+_registrar(BEBIDAS, "coca gatorade")
+_registrar(SNACKS, "chocolatina chocolatinas galleta galletas")
+_registrar(LACTEOS, "alimento")
+_registrar(CARNES, """
+    mejillones almeja almejas mojarra bagre pargo postas cubos hueso tapa chata cola
+    centro loncha calamar pulpo langostinos atun_fresco
+""")
+_registrar(CONGELADOS, "anillos")
+
+
+_registrar(DESPENSA, """
+    endulzante aceitunas sazonador condimentos condimento pimienta vinagreta compota
+    nuez nueces semillas comino curry granaroma
+""")
+_registrar(PANADERIA, "torta tortas")
+_registrar(SNACKS, "barquillos chicharron chicharrones barra")
+_registrar(BEBIDAS, "beb zumo")
+_registrar(CARNES, "res pez")
+_registrar(LACTEOS, "postre alpin")
 
 # Ambiguas a propósito (el pasillo decide): "crema" (de leche, dental, corporal),
 # "bolsa", "mezcla", "x", "mora" y "fresa" (frescas vs. congeladas).
@@ -146,8 +205,55 @@ def categoria_por_nombre(nombre: str | None) -> str | None:
     for patron, categoria in _FRASES_COMPILADAS:
         if patron.search(normalizado):
             return categoria
+    for patron, categoria in _SENALES_FUERTES_C:
+        if patron.search(normalizado):
+            return categoria
+    cabeza = _CABEZA.get(normalizado.split(" ", 1)[0])
+    if cabeza is None:
+        for patron, categoria in _SENALES_SUAVES_C:
+            if patron.search(normalizado):
+                return categoria
     categoria = _CABEZA.get(normalizado.split(" ", 1)[0])
     # Una fruta, verdura o grano "congelado" ya no es fresco ni de despensa.
     if categoria in (FRUTAS, DESPENSA) and _CONGELADO.search(normalizado):
         return CONGELADOS
     return categoria
+
+
+_RAICES_GENERICAS = {"supermercado", "mercado"}
+
+
+def _es_pasillo_generico(ruta_categoria: str | None) -> bool:
+    """True si la ruta es vacía o sólo la raíz del sitio (sin subcategorías)."""
+    segmentos = [_normalizar(x) for x in (ruta_categoria or "").split("/") if x.strip()]
+    return all(x in _RAICES_GENERICAS for x in segmentos)
+
+
+@lru_cache(maxsize=4096)
+def _etiqueta_por_pasillo(ruta_categoria: str | None) -> str | None:
+    # Hay unos pocos cientos de pasillos distintos frente a miles de
+    # productos: se clasifica cada pasillo una vez, no una vez por producto.
+    return etiqueta_amigable(ruta_categoria)
+
+
+def categoria_de_producto(nombre: str | None, ruta_categoria: str | None) -> str | None:
+    """Categoría amigable de un producto. Se decide por el NOMBRE (lo que el
+    producto es) y sólo si no alcanza se usa el pasillo del supermercado, que
+    es inconsistente (ej. leche de coco en "Pescados y mariscos"). Si el
+    pasillo no pertenece al alcance de canasta familiar, el producto queda
+    fuera aunque el nombre sugiera una categoría.
+
+    Se usa tanto para mostrarle la categoría al consumidor (backend) como
+    para AGRUPAR productos candidatos a homologar (`etl/homologacion/run.py`):
+    agrupar por esta etiqueta -- en vez de por el pasillo crudo -- evita que
+    dos huevos iguales queden en grupos distintos solo porque un supermercado
+    los archiva bajo "Lácteos" y el otro bajo "Huevos"."""
+    por_pasillo = _etiqueta_por_pasillo(ruta_categoria)
+    if por_pasillo is None:
+        # Un pasillo que es sólo la raíz del sitio ("/Supermercado/") no dice
+        # nada: ahí Jumbo archiva leche y café sueltos. Se decide por el nombre,
+        # y si el nombre tampoco alcanza, queda fuera.
+        if _es_pasillo_generico(ruta_categoria):
+            return categoria_por_nombre(nombre)
+        return None
+    return categoria_por_nombre(nombre) or por_pasillo

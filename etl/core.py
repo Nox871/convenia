@@ -30,6 +30,11 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from scraper.core.raw_writer import resolver_ultimo_raw  # noqa: E402
+from shared.category_filter import es_producto_no_canasta  # noqa: E402
+from shared.brand import limpiar_marca  # noqa: E402
+from shared.ean import normalizar_ean  # noqa: E402
+from shared.category_producto import categoria_de_producto  # noqa: E402
+from shared.precio_comparable import es_precio_no_comparable  # noqa: E402
 
 from etl import db
 from etl.common import (
@@ -53,9 +58,13 @@ class RawValidationError(Exception):
 
 
 class SupermarketETL:
-    def __init__(self, code: str, raw_dir: Path):
+    def __init__(self, code: str, raw_dir: Path, aceptar_tamano: bool = False):
         self.code = code
         self.raw_dir = Path(raw_dir)
+        # Sólo para una carga MANUAL: se omite la protección de "RAW demasiado pequeño"
+        # tras confirmar que la caída es legítima (p. ej. el scraper dejó de traer
+        # productos agotados). Nunca se usa en la corrida diaria.
+        self.aceptar_tamano = aceptar_tamano
         self.stats = ETLStats()
         self._category_cache: dict[str, int] = {}
         self.run_id: int | None = None
@@ -114,24 +123,26 @@ class SupermarketETL:
         return run_id
 
     def _average_historical_products(self, conn, supermarket_id: int) -> float | None:
-        """Promedio de products_detected de los últimos 5 runs válidos, usado
-        como referencia para el chequeo de calidad mínima."""
+        """Referencia para el chequeo de tamaño mínimo: los productos del ÚLTIMO run
+        válido de la tienda. Se compara contra el último y no contra un promedio de
+        varios días porque, si el catálogo cambia de verdad (p. ej. el scraper deja de
+        traer productos agotados), un promedio viejo bloquearía la carga todas las
+        noches. Un scraper roto sigue detectándose: sus corridas fallidas no cuentan
+        como referencia, así que se compara siempre contra el último dato bueno."""
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT AVG(products_detected) FROM (
-                    SELECT products_detected FROM scraper_runs
-                    WHERE supermarket_id = %s
-                      AND status IN ('SUCCESS', 'SUCCESS_WITH_ERRORS')
-                      AND products_detected IS NOT NULL
-                    ORDER BY started_at DESC
-                    LIMIT 5
-                ) recientes
+                SELECT products_detected FROM scraper_runs
+                WHERE supermarket_id = %s
+                  AND status IN ('SUCCESS', 'SUCCESS_WITH_ERRORS')
+                  AND products_detected IS NOT NULL
+                ORDER BY started_at DESC
+                LIMIT 1
                 """,
                 (supermarket_id,),
             )
-            (promedio,) = cur.fetchone()
-        return float(promedio) if promedio is not None else None
+            fila = cur.fetchone()
+        return float(fila[0]) if fila and fila[0] is not None else None
 
     def _finish_run(self, conn, run_id: int, status: str, finished_at, **counters) -> None:
         with conn.cursor() as cur:
@@ -220,9 +231,9 @@ class SupermarketETL:
                     supermarket_id, source_category_id, external_id, name_raw, brand_raw,
                     brand_external_id, product_reference, product_reference_code, product_url,
                     image_url, release_date, seller_name_raw, seller_external_id,
-                    first_seen_at, last_seen_at, status, raw_data
+                    first_seen_at, last_seen_at, status, raw_data, ean
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'ACTIVE', %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'ACTIVE', %s, %s
                 )
                 ON CONFLICT (supermarket_id, external_id) DO UPDATE SET
                     source_category_id = EXCLUDED.source_category_id,
@@ -249,7 +260,9 @@ class SupermarketETL:
                     status = 'ACTIVE',
                     consecutive_missing_runs = 0,
                     discontinued_at = NULL,
-                    raw_data = EXCLUDED.raw_data
+                    raw_data = EXCLUDED.raw_data,
+                    -- Si hoy no vino el EAN, se conserva el que ya se conocía.
+                    ean = COALESCE(EXCLUDED.ean, source_products.ean)
                 RETURNING id, (xmax = 0) AS inserted
                 """,
                 (
@@ -257,7 +270,7 @@ class SupermarketETL:
                     source_category_id,
                     external_id,
                     name_raw,
-                    normalize_str(product.get("brand")),
+                    limpiar_marca(normalize_str(product.get("brand"))),
                     normalize_str(product.get("brand_id")),
                     normalize_str(product.get("product_reference")),
                     normalize_str(product.get("product_reference_code")),
@@ -269,21 +282,86 @@ class SupermarketETL:
                     extracted_at,
                     extracted_at,
                     Json(product),
+                    normalizar_ean(product.get("ean")),
                 ),
             )
             source_product_id, inserted = cur.fetchone()
 
         return source_product_id, inserted
 
+    def _registrar_disponibilidad(self, conn, source_product_id: int, disponible: bool,
+                                   motivo: str | None, observed_at, run_id: int | None) -> None:
+        """Una fila por producto y día en `availability_log` (tabla aparte: nunca
+        toca los precios que lee la app). Un nuevo dato del mismo día la actualiza."""
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO availability_log (source_product_id, observed_on, available, reason,
+                                              scraper_run_id, observed_at)
+                VALUES (%s, (%s::timestamptz AT TIME ZONE 'America/Bogota')::date, %s, %s, %s, %s)
+                ON CONFLICT (source_product_id, observed_on) DO UPDATE
+                SET available = EXCLUDED.available, reason = EXCLUDED.reason,
+                    scraper_run_id = EXCLUDED.scraper_run_id, observed_at = EXCLUDED.observed_at
+                """,
+                (source_product_id, observed_at, disponible, motivo, run_id, observed_at),
+            )
+
     def _insert_price_observation(self, conn, source_product_id: int, product: dict,
                                    observed_at, run_id: int | None) -> bool:
         price = to_decimal(product.get("price"))
-        if price is None:
-            raise ValueError("price ausente: no se puede registrar price_observation")
+        if price is None or price <= 0:
+            # Precio 0 = agotado / sin precio en la tienda: no es una oferta.
+            # No se registra (mostraba "$0" y arruinaba los promedios) y el
+            # producto queda como no disponible: si no, la app seguiría
+            # mostrando como actual el último precio válido de otro día. Vuelve
+            # a ACTIVE solo cuando aparezca de nuevo con precio.
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE source_products SET status = 'TEMPORARILY_UNAVAILABLE' "
+                    "WHERE id = %s AND status = 'ACTIVE'",
+                    (source_product_id,),
+                )
+            self._registrar_disponibilidad(
+                conn, source_product_id, False, product.get("_motivo_sin_precio") or "sin_precio",
+                observed_at, run_id,
+            )
+            return False
+
+        self._registrar_disponibilidad(conn, source_product_id, True, None, observed_at, run_id)
 
         list_price = to_decimal(product.get("list_price"))
         currency = normalize_str(product.get("currency")) or "COP"
         payment_methods = normalize_payment_methods(product.get("payment_methods"))
+
+        # UNA observación por producto y por día (hora de Bogotá): si la corrida
+        # se repite el mismo día (reintento, corrida manual), se actualiza la
+        # del día en lugar de sumar otra.
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE price_observations
+                SET price = %s, list_price = %s, currency = %s, available = TRUE,
+                    observed_at = %s, payment_methods = %s, scraper_run_id = %s
+                WHERE id = (
+                    SELECT id FROM price_observations
+                    WHERE source_product_id = %s
+                      AND (observed_at AT TIME ZONE 'America/Bogota')::date
+                          = (%s::timestamptz AT TIME ZONE 'America/Bogota')::date
+                    ORDER BY observed_at DESC LIMIT 1
+                )
+                RETURNING id
+                """,
+                (price, list_price, currency, observed_at, Json(payment_methods), run_id,
+                 source_product_id, observed_at),
+            )
+            actualizada = cur.fetchone()
+        if actualizada is not None:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE source_products SET last_price_at = %s WHERE id = %s",
+                    (observed_at, source_product_id),
+                )
+            return False
 
         with conn.cursor() as cur:
             cur.execute(
@@ -292,24 +370,12 @@ class SupermarketETL:
                     source_product_id, price, list_price, currency, available,
                     observed_at, payment_methods, scraper_run_id
                 )
-                SELECT %s, %s, %s, %s, TRUE, %s, %s, %s
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM price_observations
-                    WHERE source_product_id = %s AND observed_at = %s
-                )
+                VALUES (%s, %s, %s, %s, TRUE, %s, %s, %s)
+                ON CONFLICT DO NOTHING
                 RETURNING id
                 """,
-                (
-                    source_product_id,
-                    price,
-                    list_price,
-                    currency,
-                    observed_at,
-                    Json(payment_methods),
-                    run_id,
-                    source_product_id,
-                    observed_at,
-                ),
+                (source_product_id, price, list_price, currency, observed_at,
+                 Json(payment_methods), run_id),
             )
             row = cur.fetchone()
 
@@ -419,11 +485,107 @@ class SupermarketETL:
                 exc,
             )
 
+    def _filtrar_productos(self, products: list[dict]) -> list[dict]:
+        """Barreras de calidad aplicadas al RAW antes de cargar (ver cada bloque)."""
+        # Segunda barrera: aunque el scraper ya los descarta, un RAW viejo o de otro
+        # origen podría traer muebles o aparatos que no son de canasta.
+        sin_no_canasta = [
+            p
+            for p in products
+            if not es_producto_no_canasta(p.get("product_name") or p.get("name"), p.get("brand"))
+        ]
+        if len(sin_no_canasta) != len(products):
+            logger.info(
+                "%s: se omiten %d muebles/aparatos (no canasta) del RAW",
+                self.code,
+                len(products) - len(sin_no_canasta),
+            )
+        products = sin_no_canasta
+        # Tercera barrera: el pasillo debe pertenecer al alcance de canasta
+        # familiar (comida, bebidas, aseo y cuidado personal). Sin ella entraban
+        # televisores, vajilla y decoración navideña de pasillos de otros rubros.
+        en_canasta = [
+            p
+            for p in products
+            if categoria_de_producto(p.get("product_name") or p.get("name"), p.get("category"))
+            is not None
+        ]
+        if len(en_canasta) != len(products):
+            logger.info(
+                "%s: se omiten %d productos de pasillos fuera de canasta del RAW",
+                self.code,
+                len(products) - len(en_canasta),
+            )
+        products = en_canasta
+        # Variantes indistinguibles: en una misma tienda, mismo nombre y misma
+        # marca con ids distintos (sabores, presentaciones mal etiquetadas en
+        # el catálogo) no se pueden diferenciar para el consumidor y repetían el
+        # producto en la lista. Se conserva el de menor precio con stock.
+        unicos: dict[tuple[str, str], dict] = {}
+        sin_precio = []
+        n_no_comparables = 0
+        for p in products:
+            precio = to_decimal(p.get("price"))
+            if precio is not None and es_precio_no_comparable(
+                p.get("product_name") or p.get("name"), p.get("category"), precio
+            ):
+                # Se trata como "sin precio": queda no disponible y no gana "el más barato".
+                n_no_comparables += 1
+                sin_precio.append(
+                    {**p, "price": None, "list_price": None, "_motivo_sin_precio": "precio_no_comparable"}
+                )
+                continue
+            if precio is None or precio <= 0:
+                sin_precio.append(p)
+                continue
+            clave = (
+                " ".join(str(p.get("product_name") or p.get("name") or "").lower().split()),
+                " ".join(str(p.get("brand") or "").lower().split()),
+            )
+            previo = unicos.get(clave)
+            if previo is None or precio < to_decimal(previo.get("price")):
+                unicos[clave] = p
+        if n_no_comparables:
+            logger.info(
+                "%s: %d cortes frescos con precio no comparable (sin peso declarado) quedan sin precio",
+                self.code,
+                n_no_comparables,
+            )
+        colapsados = len(products) - len(sin_precio) - len(unicos)
+        if colapsados:
+            logger.info(
+                "%s: se unen %d variantes con el mismo nombre y marca (se conserva la más barata)",
+                self.code,
+                colapsados,
+            )
+        # Mismo EAN en la misma tienda con ids distintos: es el mismo artículo
+        # publicado dos veces (variantes, listados duplicados). Se conserva el más barato.
+        por_ean: dict[str, dict] = {}
+        resto: list[dict] = []
+        for p in unicos.values():
+            ean = normalizar_ean(p.get("ean"))
+            if ean is None:
+                resto.append(p)
+                continue
+            previo = por_ean.get(ean)
+            if previo is None or to_decimal(p.get("price")) < to_decimal(previo.get("price")):
+                por_ean[ean] = p
+        colapsados_ean = len(unicos) - len(resto) - len(por_ean)
+        if colapsados_ean:
+            logger.info(
+                "%s: se unen %d publicaciones del mismo código de barras (se conserva la más barata)",
+                self.code,
+                colapsados_ean,
+            )
+        products = resto + list(por_ean.values()) + sin_precio
+        return products
+
     def run(self) -> ETLStats:
         logger.info("Iniciando ETL %s desde %s", self.code, self.raw_dir)
         started_at = datetime.now(timezone.utc)
         data, raw_path = self._load_raw()
         products = data["products"]
+        products = self._filtrar_productos(products)
         self.stats.raw_count = len(products)
 
         with db.get_connection() as conn:
@@ -433,7 +595,16 @@ class SupermarketETL:
             # Protección contra ejecuciones con muy pocos productos (scraping
             # roto) — no debe interpretarse como descontinuación masiva.
             promedio_historico = self._average_historical_products(conn, supermarket_id)
-            if promedio_historico and len(products) < promedio_historico * MIN_PRODUCTS_RATIO_VS_HISTORY:
+            if (
+                promedio_historico
+                and len(products) < promedio_historico * MIN_PRODUCTS_RATIO_VS_HISTORY
+                and self.aceptar_tamano
+            ):
+                logger.warning(
+                    "%s: RAW de %d productos vs promedio %.0f; se acepta por --aceptar-tamano.",
+                    self.code, len(products), promedio_historico,
+                )
+            elif promedio_historico and len(products) < promedio_historico * MIN_PRODUCTS_RATIO_VS_HISTORY:
                 mensaje = (
                     f"RAW sospechosamente pequeño para {self.code}: {len(products)} productos "
                     f"vs promedio histórico {promedio_historico:.0f} "

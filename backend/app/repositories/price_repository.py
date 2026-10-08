@@ -10,7 +10,7 @@ def get_latest_offers(
 ) -> list[dict]:
     """Última observación de precio DISPONIBLE por cada source_product dado.
 
-    Usa `available = TRUE` explícitamente (regla de negocio: nunca comparar u
+    Usa `available = TRUE AND price > 0` explícitamente (regla de negocio: nunca comparar u
     ofrecer precios marcados como no disponibles) y ordena por precio
     ascendente para que el más barato quede primero.
     """
@@ -35,7 +35,7 @@ def get_latest_offers(
             JOIN LATERAL (
                 SELECT price, list_price, currency, available, observed_at, payment_methods
                 FROM price_observations
-                WHERE source_product_id = sp.id AND available = TRUE
+                WHERE source_product_id = sp.id AND available = TRUE AND price > 0 AND sp.status = 'ACTIVE'
                 ORDER BY observed_at DESC
                 LIMIT 1
             ) po ON TRUE
@@ -84,7 +84,7 @@ def get_offers_for_compare(
                 LEFT JOIN LATERAL (
                     SELECT price, list_price, currency, available, observed_at, payment_methods
                     FROM price_observations
-                    WHERE source_product_id = sp.id AND available = TRUE
+                    WHERE source_product_id = sp.id AND available = TRUE AND price > 0 AND sp.status = 'ACTIVE'
                     ORDER BY observed_at DESC
                     LIMIT 1
                 ) po ON TRUE
@@ -102,61 +102,55 @@ def get_offers_for_compare(
     return [dict(row) for row in rows]
 
 
-def get_price_history_summary(conn: Connection, source_product_ids: list[int]) -> dict | None:
-    """Agregados (min/max/avg/actual/variación) calculados en SQL — nunca
-    trayendo todas las observaciones a Python para calcularlos ahí."""
+def _diaria_cte(supermarket_codes: list[str] | None, filtro_mes: str = "") -> str:
+    """Serie diaria: UNA observación por día (hora de Bogotá) con el MEJOR precio
+    entre los supermercados al alcance. Mezclar el precio de cada tienda como si
+    fueran observaciones de una sola serie daba promedios sin sentido y varias
+    "observaciones" por día."""
+    scope = "" if supermarket_codes is None else "AND s.code = ANY(:sm_codes)"
+    return f"""
+        WITH diaria AS (
+            SELECT (po.observed_at AT TIME ZONE 'America/Bogota')::date AS dia,
+                   MIN(po.price) AS price,
+                   MIN(po.list_price) AS list_price,
+                   MAX(po.observed_at) AS observed_at
+            FROM price_observations po
+            JOIN source_products sp ON sp.id = po.source_product_id
+            JOIN supermarkets s ON s.id = sp.supermarket_id
+            WHERE po.source_product_id = ANY(:ids)
+              AND po.available = TRUE AND po.price > 0 {scope} {filtro_mes}
+            GROUP BY 1
+        )
+    """
+
+
+def get_price_history_summary(
+    conn: Connection, source_product_ids: list[int], supermarket_codes: list[str] | None = None
+) -> dict | None:
+    """Agregados (min/max/avg/actual/variación) sobre la serie diaria, calculados en SQL."""
     if not source_product_ids:
         return None
 
+    params = {"ids": source_product_ids, "sm_codes": supermarket_codes}
+    cte = _diaria_cte(supermarket_codes)
     row = conn.execute(
         text(
-            """
-            SELECT
-                MIN(price) AS min_price,
-                MAX(price) AS max_price,
-                AVG(price) AS avg_price,
-                COUNT(*) AS observations_count
-            FROM price_observations
-            WHERE source_product_id = ANY(:ids)
+            cte
+            + """
+            SELECT MIN(price) AS min_price, MAX(price) AS max_price, AVG(price) AS avg_price,
+                   COUNT(*) AS observations_count,
+                   (SELECT price FROM diaria ORDER BY dia DESC LIMIT 1) AS current_price,
+                   (SELECT observed_at FROM diaria ORDER BY dia DESC LIMIT 1) AS current_observed_at,
+                   (SELECT price FROM diaria ORDER BY dia ASC LIMIT 1) AS first_price
+            FROM diaria
             """
         ),
-        {"ids": source_product_ids},
+        params,
     ).mappings().first()
 
     if row is None or row["observations_count"] == 0:
         return None
-
-    actual_row = conn.execute(
-        text(
-            """
-            SELECT price, observed_at
-            FROM price_observations
-            WHERE source_product_id = ANY(:ids)
-            ORDER BY observed_at DESC
-            LIMIT 1
-            """
-        ),
-        {"ids": source_product_ids},
-    ).mappings().first()
-
-    primera_row = conn.execute(
-        text(
-            """
-            SELECT price
-            FROM price_observations
-            WHERE source_product_id = ANY(:ids)
-            ORDER BY observed_at ASC
-            LIMIT 1
-            """
-        ),
-        {"ids": source_product_ids},
-    ).mappings().first()
-
-    resultado = dict(row)
-    resultado["current_price"] = actual_row["price"]
-    resultado["current_observed_at"] = actual_row["observed_at"]
-    resultado["first_price"] = primera_row["price"]
-    return resultado
+    return dict(row)
 
 
 def get_price_history_observations(
@@ -165,77 +159,57 @@ def get_price_history_observations(
     offset: int,
     limit: int,
     month: str | None = None,
+    supermarket_codes: list[str] | None = None,
 ) -> tuple[list[dict], int]:
-    """Lista paginada de observaciones históricas (nunca todo el historial
-    de una vez). `month` (formato 'YYYY-MM') filtra a un mes específico
-    para el drill-down del historial visual."""
+    """Lista paginada de la serie diaria (un punto por día; nunca todo el
+    historial de una vez). `month` ('YYYY-MM') filtra a un mes para el drill-down."""
     if not source_product_ids:
         return [], 0
 
-    params: dict = {"ids": source_product_ids, "offset": offset, "limit": limit}
-    # Filtro de mes calculado en SQL (no en Python) para no depender de saber
-    # cuántos días tiene el mes -- `desde::date + interval '1 month'`.
+    params: dict = {"ids": source_product_ids, "sm_codes": supermarket_codes}
     filtro_mes = ""
     if month:
         params["desde"] = f"{month}-01"
         filtro_mes = (
-            "AND observed_at >= CAST(:desde AS date) "
-            "AND observed_at < (CAST(:desde AS date) + interval '1 month')"
+            "AND po.observed_at >= CAST(:desde AS date) "
+            "AND po.observed_at < (CAST(:desde AS date) + interval '1 month')"
         )
+    cte = _diaria_cte(supermarket_codes, filtro_mes)
 
     rows = conn.execute(
         text(
-            f"""
-            SELECT price, list_price, currency, available, observed_at
-            FROM price_observations
-            WHERE source_product_id = ANY(:ids)
-            {filtro_mes}
-            ORDER BY observed_at DESC
-            OFFSET :offset LIMIT :limit
+            cte
+            + """
+            SELECT price, list_price, 'COP' AS currency, TRUE AS available, observed_at
+            FROM diaria ORDER BY dia DESC OFFSET :offset LIMIT :limit
             """
         ),
-        params,
+        {**params, "offset": offset, "limit": limit},
     ).mappings().all()
-
-    total = conn.execute(
-        text(
-            f"""
-            SELECT COUNT(*) FROM price_observations
-            WHERE source_product_id = ANY(:ids)
-            {filtro_mes}
-            """
-        ),
-        {k: v for k, v in params.items() if k not in ("offset", "limit")},
-    ).scalar_one()
-
+    total = conn.execute(text(cte + "SELECT COUNT(*) FROM diaria"), params).scalar_one()
     return [dict(row) for row in rows], total
 
 
-def get_price_history_monthly(conn: Connection, source_product_ids: list[int]) -> list[dict]:
-    """Agregados por mes (min/max/avg/cantidad) para el historial visual de
-    barras. Meses sin observaciones simplemente no aparecen en el
-    resultado -- nunca se rellenan con 0."""
+def get_price_history_monthly(
+    conn: Connection, source_product_ids: list[int], supermarket_codes: list[str] | None = None
+) -> list[dict]:
+    """Agregados por mes sobre la serie diaria. Meses sin datos no aparecen."""
     if not source_product_ids:
         return []
 
+    cte = _diaria_cte(supermarket_codes)
     rows = conn.execute(
         text(
-            """
-            SELECT
-                to_char(date_trunc('month', observed_at), 'YYYY-MM') AS month,
-                MIN(price) AS min_price,
-                MAX(price) AS max_price,
-                AVG(price) AS avg_price,
-                COUNT(*) AS observations_count
-            FROM price_observations
-            WHERE source_product_id = ANY(:ids)
-            GROUP BY 1
-            ORDER BY 1 ASC
+            cte
+            + """
+            SELECT to_char(date_trunc('month', dia), 'YYYY-MM') AS month,
+                   MIN(price) AS min_price, MAX(price) AS max_price, AVG(price) AS avg_price,
+                   COUNT(*) AS observations_count
+            FROM diaria GROUP BY 1 ORDER BY 1 ASC
             """
         ),
-        {"ids": source_product_ids},
+        {"ids": source_product_ids, "sm_codes": supermarket_codes},
     ).mappings().all()
-
     return [dict(row) for row in rows]
 
 
@@ -258,7 +232,7 @@ def list_current_offers(conn: Connection, supermarket_codes: list[str] | None = 
             JOIN supermarkets s ON s.id = sp.supermarket_id
             JOIN LATERAL (
                 SELECT price FROM price_observations
-                WHERE source_product_id = sp.id AND available = TRUE
+                WHERE source_product_id = sp.id AND available = TRUE AND price > 0 AND sp.status = 'ACTIVE'
                 ORDER BY observed_at DESC LIMIT 1
             ) po ON TRUE
             WHERE sp.is_active = TRUE AND s.is_active = TRUE {scope}

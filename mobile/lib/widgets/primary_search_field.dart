@@ -14,7 +14,7 @@ class PrimarySearchField extends StatelessWidget {
     super.key,
     required this.controller,
     required this.onSubmitted,
-    this.hintText = '¿Qué producto estás buscando?',
+    this.hintText = '¿Qué producto buscas?',
     this.focusNode,
   });
 
@@ -35,10 +35,25 @@ class PrimarySearchField extends StatelessWidget {
           suffixIcon: ValueListenableBuilder<TextEditingValue>(
             valueListenable: controller,
             builder: (context, value, _) {
-              if (value.text.isEmpty) return const SizedBox.shrink();
-              return IconButton(
-                icon: const Icon(Icons.close_rounded, color: AppColors.inkFaint),
-                onPressed: () => controller.clear(),
+              if (value.text.trim().isEmpty) return const SizedBox.shrink();
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: 'Borrar',
+                    icon: const Icon(Icons.close_rounded, color: AppColors.inkFaint),
+                    onPressed: () => controller.clear(),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: IconButton.filled(
+                      tooltip: 'Buscar',
+                      style: IconButton.styleFrom(backgroundColor: AppColors.brandIndigo),
+                      icon: const Icon(Icons.arrow_forward_rounded, color: AppColors.white, size: 20),
+                      onPressed: () => onSubmitted(controller.text),
+                    ),
+                  ),
+                ],
               );
             },
           ),

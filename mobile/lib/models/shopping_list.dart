@@ -99,6 +99,9 @@ class SupermarketCost {
   final int itemsTotal;
   final bool isComplete;
 
+  /// Ids de los ítems de la lista que NO tienen precio en este supermercado.
+  final List<int> missingItemIds;
+
   const SupermarketCost({
     required this.supermarketCode,
     required this.supermarketName,
@@ -106,6 +109,7 @@ class SupermarketCost {
     required this.itemsPriced,
     required this.itemsTotal,
     required this.isComplete,
+    this.missingItemIds = const [],
   });
 
   factory SupermarketCost.fromJson(Map<String, dynamic> json) {
@@ -116,6 +120,7 @@ class SupermarketCost {
       itemsPriced: json['items_priced'] as int,
       itemsTotal: json['items_total'] as int,
       isComplete: json['is_complete'] as bool,
+      missingItemIds: (json['missing_item_ids'] as List<dynamic>? ?? const []).cast<int>(),
     );
   }
 }

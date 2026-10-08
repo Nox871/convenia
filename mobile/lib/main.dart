@@ -24,7 +24,12 @@ class ConveniaApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => AuthController()),
         ChangeNotifierProvider(create: (_) => PreferencesController()),
         // La cobertura sigue a la distancia máxima elegida en Perfil.
+        // `lazy: false`: debe existir desde el arranque porque es quien le pone el
+        // alcance (`?supermarkets=`) a TODA consulta de precios. Si se crea la
+        // primera vez que un widget lo lee, las primeras consultas salen sin
+        // filtro y muestran supermercados fuera del alcance.
         ChangeNotifierProxyProvider<PreferencesController, CoverageController>(
+          lazy: false,
           create: (_) => CoverageController(),
           update: (_, prefs, coverage) => coverage!
             ..configure(radiusKm: prefs.maxDistanceKm, manual: prefs.manualLocation, eager: false),

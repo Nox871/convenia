@@ -1,3 +1,4 @@
+import '../models/basket.dart';
 import '../models/compare_response.dart';
 import '../models/price_history_monthly_response.dart';
 import '../models/price_history_response.dart';
@@ -82,5 +83,39 @@ class ProductRepository {
       queryParameters: {'q': query, 'limit': '$limit', 'prefer': prefer},
     );
     return ProductSuggestResponse.fromJson(json);
+  }
+
+  /// "¿Quisiste decir…?": búsqueda corregida si el texto parece mal escrito
+  /// ("aroz" -> "arroz"), o null si está bien o no hay nada parecido.
+  Future<String?> didYouMean(String query) async {
+    final json = await _client.getJson(
+      '/api/v1/products/did-you-mean',
+      queryParameters: {'q': query},
+    );
+    return json['suggestion'] as String?;
+  }
+
+  /// Arma una lista para un nivel de gasto y, si se indica, un presupuesto.
+  /// El orden de [terms] es su prioridad.
+  Future<BasketResponse> buildBasket(
+    List<String> terms, {
+    required SpendTier tier,
+    double? budget,
+  }) async {
+    final params = {'terms': terms.join('|'), 'tier': tier.apiValue};
+    if (budget != null) params['budget'] = budget.round().toString();
+    final json = await _client.getJson('/api/v1/products/basket', queryParameters: params);
+    return BasketResponse.fromJson(json);
+  }
+
+  /// Lo que más se busca en la app (sólo texto y conteo, nada de la persona).
+  Future<List<String>> popularSearches({int limit = 6}) async {
+    final json = await _client.getJson(
+      '/api/v1/products/popular-searches',
+      queryParameters: {'limit': '$limit'},
+    );
+    return [
+      for (final item in (json['items'] as List<dynamic>)) (item as Map<String, dynamic>)['term'] as String,
+    ];
   }
 }

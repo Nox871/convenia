@@ -18,6 +18,7 @@ from app.schemas.shopping_list import (
     ShoppingListListResponse,
     ShoppingListBudget,
     ShoppingListRename,
+    SingleStoreResponse,
     SwapSuggestionsResponse,
 )
 from app.services import shopping_list_service
@@ -152,3 +153,17 @@ def get_swap_suggestions(
     """Sustitutos más baratos, del mismo tipo y tamaño, para bajar el costo de
     la lista (por ejemplo cuando se pasa del presupuesto)."""
     return shopping_list_service.get_swap_suggestions(conn, list_id, owner_ref, supermarket_codes=scope)
+
+
+@router.get("/{list_id}/single-store", response_model=SingleStoreResponse)
+def get_single_store_options(
+    list_id: int,
+    owner_ref: str = Depends(owner_ref_dependency),
+    scope: list[str] | None = Depends(parse_supermarket_scope),
+    conn: Connection = Depends(get_db),
+):
+    """Cómo comprar la lista en un solo supermercado: qué le falta a cada uno y con
+    qué producto parecido de esa misma tienda se completa."""
+    return shopping_list_service.get_single_store_options(
+        conn, list_id, owner_ref, supermarket_codes=scope
+    )

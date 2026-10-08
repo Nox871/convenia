@@ -5,14 +5,19 @@ import 'package:provider/provider.dart';
 
 import '../core/theme.dart';
 import '../models/category.dart';
+import '../core/formatters.dart';
 import '../repositories/category_repository.dart';
+import '../repositories/product_repository.dart';
 import '../state/auth_controller.dart';
 import '../widgets/convenia_logo.dart';
 import '../widgets/primary_search_field.dart';
 import '../widgets/quick_search_chip.dart';
+import '../widgets/scope_note.dart';
 import 'results_screen.dart';
 
-const _quickSearches = ['Leche', 'Arroz', 'Café', 'Huevos'];
+/// Mientras todavía no hay suficientes búsquedas reales (o si no se pueden pedir),
+/// estas son las sugerencias de arranque.
+const _defaultQuickSearches = ['Leche', 'Arroz', 'Café', 'Huevos'];
 
 /// Íconos por etiqueta de categoría (ver `ETIQUETAS_AMIGABLES` en
 /// `shared/category_filter.py`) -- puramente decorativo, así que una
@@ -47,6 +52,8 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final _searchController = TextEditingController();
   final _categoryRepository = CategoryRepository();
+  final _productRepository = ProductRepository();
+  List<String> _quickSearches = _defaultQuickSearches;
   List<Category>? _categories;
   bool _categoriesFailed = false;
   Timer? _retryTimer;
@@ -55,6 +62,24 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _loadCategories();
+    _loadQuickSearches();
+  }
+
+  /// Las búsquedas frecuentes salen de lo que de verdad se busca en la app. Con pocas
+  /// búsquedas registradas se completan con las de arranque.
+  Future<void> _loadQuickSearches() async {
+    try {
+      final real = await _productRepository.popularSearches(limit: 6);
+      if (!mounted || real.isEmpty) return;
+      final merged = [...real];
+      for (final d in _defaultQuickSearches) {
+        if (merged.length >= 4) break;
+        if (!merged.any((m) => m.toLowerCase() == d.toLowerCase())) merged.add(d);
+      }
+      setState(() => _quickSearches = merged);
+    } catch (_) {
+      // Se quedan las de arranque.
+    }
   }
 
   /// Las categorías son de acceso rápido: si fallan, la búsqueda normal sigue
@@ -111,95 +136,79 @@ class _HomeScreenState extends State<HomeScreen> {
         ? auth.currentUser!.firstName
         : null;
 
-    return Scaffold(
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.horizontalPage,
-            vertical: AppSpacing.xxl,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const ConveniaWordmark(),
-              const SizedBox(height: AppSpacing.xs),
-              const Text(
-                'Antes de comprar, elige dónde.',
-                style: TextStyle(
-                  fontSize: 13,
-                  fontStyle: FontStyle.italic,
-                  color: AppColors.inkMuted,
-                ),
-              ),
-              const SizedBox(height: AppSpacing.xxxl),
-              Text(
-                greetedName != null ? '${_greeting()}, $greetedName' : _greeting(),
-                style: AppText.hero,
-              ),
-              const SizedBox(height: AppSpacing.sm),
-              Text(
-                greetedName != null
-                    ? '¿Qué vamos a buscar hoy?'
-                    : 'Compara precios de supermercados antes de comprar y ahorra en cada producto.',
-                style: AppText.body,
-              ),
-              const SizedBox(height: AppSpacing.xxl),
-              PrimarySearchField(controller: _searchController, onSubmitted: _search),
-              const SizedBox(height: AppSpacing.md),
-              ElevatedButton(
-                onPressed: () => _search(_searchController.text),
-                child: const Text('Buscar'),
-              ),
-              const SizedBox(height: AppSpacing.sm),
-              Text(
-                'Ejemplo: leche, arroz, café, huevos...',
-                style: AppText.caption,
-              ),
-              const SizedBox(height: AppSpacing.xxxl),
-              const Text(
-                'BÚSQUEDAS FRECUENTES',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.inkFaint,
-                  letterSpacing: 0.6,
-                ),
-              ),
-              const SizedBox(height: AppSpacing.md),
-              Wrap(
-                spacing: AppSpacing.sm,
-                runSpacing: AppSpacing.sm,
-                children: _quickSearches
-                    .map((term) => QuickSearchChip(label: term, onTap: () => _search(term)))
-                    .toList(),
-              ),
-              if (_categories == null || _categories!.isNotEmpty || _categoriesFailed) ...[
-                const SizedBox(height: AppSpacing.xxxl),
+    return ScopeReloader(
+      // Al cambiar el alcance (distancia o ubicación) los conteos de las categorías cambian.
+      onChanged: _loadCategories,
+      child: Scaffold(
+        body: SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.horizontalPage,
+              vertical: AppSpacing.xl,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const ConveniaWordmark(),
+                const SizedBox(height: AppSpacing.xs),
                 const Text(
-                  'CATEGORÍAS DE COMPRA',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.inkFaint,
-                    letterSpacing: 0.6,
-                  ),
+                  'Antes de comprar, elige dónde.',
+                  style: TextStyle(fontSize: 13, fontStyle: FontStyle.italic, color: AppColors.inkMuted),
                 ),
+                const SizedBox(height: AppSpacing.xxl),
+                Text(
+                  greetedName != null ? '${_greeting()}, $greetedName' : _greeting(),
+                  style: AppText.hero,
+                ),
+                const SizedBox(height: AppSpacing.lg),
+                PrimarySearchField(controller: _searchController, onSubmitted: _search),
+                const SizedBox(height: AppSpacing.xl),
+                const _SectionLabel('BÚSQUEDAS FRECUENTES'),
                 const SizedBox(height: AppSpacing.md),
-                if (_categoriesFailed)
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text('No pudimos cargar las categorías.', style: AppText.body),
-                      ),
-                      TextButton(onPressed: _loadCategories, child: const Text('Reintentar')),
-                    ],
-                  )
-                else
-                  _CategoriesGrid(categories: _categories, onTap: _openCategory),
+                Wrap(
+                  spacing: AppSpacing.sm,
+                  runSpacing: AppSpacing.sm,
+                  children: _quickSearches
+                      .map((term) => QuickSearchChip(label: term, onTap: () => _search(term)))
+                      .toList(),
+                ),
+                if (_categories == null || _categories!.isNotEmpty || _categoriesFailed) ...[
+                  const SizedBox(height: AppSpacing.xl),
+                  const _SectionLabel('CATEGORÍAS DE COMPRA'),
+                  const SizedBox(height: AppSpacing.md),
+                  if (_categoriesFailed)
+                    Row(
+                      children: [
+                        Expanded(child: Text('No pudimos cargar las categorías.', style: AppText.body)),
+                        TextButton(onPressed: _loadCategories, child: const Text('Reintentar')),
+                      ],
+                    )
+                  else
+                    _CategoriesGrid(categories: _categories, onTap: _openCategory),
+                ],
               ],
-            ],
+            ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _SectionLabel extends StatelessWidget {
+  final String text;
+
+  const _SectionLabel(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text,
+      style: const TextStyle(
+        fontSize: 12,
+        fontWeight: FontWeight.w700,
+        color: AppColors.inkFaint,
+        letterSpacing: 0.6,
       ),
     );
   }
@@ -256,26 +265,35 @@ class _CategoryCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(AppSpacing.cardRadius),
           border: Border.all(color: AppColors.mist),
         ),
+        // Estructura fija (ícono arriba, título en un espacio de 2 líneas, conteo abajo)
+        // para que los íconos de todas las tarjetas queden a la misma altura aunque
+        // unos títulos ocupen una línea y otros dos.
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
           children: [
+            const SizedBox(height: 2),
             Icon(
               _categoryIcons[category.label] ?? Icons.shopping_basket_outlined,
               color: AppColors.brandIndigo,
               size: 26,
             ),
             const SizedBox(height: AppSpacing.xs),
-            Text(
-              category.label,
-              style: AppText.caption.copyWith(color: AppColors.ink, fontWeight: FontWeight.w600),
-              textAlign: TextAlign.center,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
+            Expanded(
+              child: Center(
+                child: Text(
+                  category.label,
+                  style: AppText.caption.copyWith(color: AppColors.ink, fontWeight: FontWeight.w600),
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
             ),
             Text(
-              '${category.supermarkets.length} supermercados',
+              '${_thousands(category.productsCount)} productos',
               style: AppText.caption,
               textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ],
         ),
@@ -283,3 +301,7 @@ class _CategoryCard extends StatelessWidget {
     );
   }
 }
+
+
+/// 1873 -> "1.873" (punto de miles, como en los precios).
+String _thousands(int n) => formatCop(n).substring(1);

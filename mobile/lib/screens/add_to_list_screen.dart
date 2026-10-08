@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:image_picker/image_picker.dart';
@@ -10,26 +12,46 @@ import '../core/ocr_list_cleaner.dart';
 import '../core/spoken_list_parser.dart';
 import '../core/suggested_lists.dart';
 import '../core/theme.dart';
+import '../models/basket.dart';
 import '../models/product_suggestion.dart';
 import '../repositories/product_repository.dart';
 import '../state/preferences_controller.dart';
+import '../widgets/budget_sheet.dart';
 import '../widgets/product_image.dart';
-import '../widgets/scope_note.dart';
+import '../widgets/product_picker_sheet.dart';
 
 /// Un renglón de la revisión: lo que se entendió, las opciones del
 /// catálogo (la primera es la propuesta) y cuál quedó elegida.
 class _ReviewRow {
   final String heardAs;
-  final List<ProductSuggestion> options;
+  List<ProductSuggestion> options;
   int selectedIndex = 0;
   int quantity;
   bool included;
-  bool showingOptions = false;
 
-  _ReviewRow({required this.heardAs, required this.options, required this.quantity})
-    : included = options.isNotEmpty;
+  /// La búsqueda falló (red o servidor): NO es lo mismo que "no existe".
+  bool failed;
+
+  /// La lista armada con presupuesto lo dejó fuera por no caber.
+  final bool droppedByBudget;
+
+  _ReviewRow({
+    required this.heardAs,
+    required this.options,
+    required this.quantity,
+    this.failed = false,
+    this.droppedByBudget = false,
+  }) : included = options.isNotEmpty;
 
   ProductSuggestion? get chosen => options.isEmpty ? null : options[selectedIndex];
+
+  /// Pone [item] como el producto elegido de esta fila.
+  void choose(ProductSuggestion item) {
+    options = [item, ...options.where((o) => o.id != item.id)];
+    selectedIndex = 0;
+    included = true;
+    failed = false;
+  }
 }
 
 /// Única entrada para agregar productos a una lista: se escribe, se dice o
@@ -39,7 +61,15 @@ class _ReviewRow {
 /// supermercados venden), y la persona puede cambiarlo, ajustar la
 /// cantidad o descartarlo antes de agregar. Nada se agrega sin confirmar.
 ///
-/// Devuelve, con `Navigator.pop`, la lista de (id de producto, cantidad).
+/// Devuelve, con `Navigator.pop`, un [AddToListResult] (productos y cantidades).
+/// Lo que devuelve la pantalla: los productos elegidos y, si la lista salió de una
+/// lista sugerida con presupuesto, ese presupuesto (para guardarlo en la lista).
+class AddToListResult {
+  final List<MapEntry<String, int>> entries;
+  final int? budget;
+  const AddToListResult(this.entries, {this.budget});
+}
+
 class AddToListScreen extends StatefulWidget {
   const AddToListScreen({super.key});
 
@@ -54,12 +84,17 @@ class _AddToListScreenState extends State<AddToListScreen> {
   final _picker = ImagePicker();
   final _textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
 
+  Timer? _silenceTimer;
+  bool _voiceSearchPending = false; // hay voz por buscar (evita buscar dos veces)
   bool _speechAvailable = false;
   String? _speechLocaleId;
   bool _listening = false;
   bool _busy = false;
+  String _busyText = 'Buscando tus productos…';
   String? _message;
   List<_ReviewRow>? _rows;
+  double? _chosenBudget; // presupuesto elegido al armar una lista sugerida
+  BasketResponse? _basket; // si la lista salió de una lista sugerida con presupuesto
 
   @override
   void initState() {
@@ -93,7 +128,29 @@ class _AddToListScreenState extends State<AddToListScreen> {
   void _onSpeechStatus(String status) {
     if ((status == 'done' || status == 'notListening') && mounted && _listening) {
       setState(() => _listening = false);
+      // El reconocedor se cerró solo: si se alcanzó a oír algo, se busca.
+      _searchAfterVoice();
     }
+  }
+
+  /// Apaga el micrófono y busca lo dicho, una sola vez por cada vez que se habla.
+  void _searchAfterVoice() {
+    _silenceTimer?.cancel();
+    if (!_voiceSearchPending || !mounted) return;
+    _voiceSearchPending = false;
+    if (_controller.text.trim().isNotEmpty) _search();
+  }
+
+  /// 3 segundos sin oír nada nuevo = terminó de hablar: se apaga el micrófono y se busca.
+  void _armSilenceTimer() {
+    _silenceTimer?.cancel();
+    _silenceTimer = Timer(const Duration(seconds: 3), () async {
+      if (!_listening || !mounted) return;
+      await _speech.stop();
+      if (!mounted) return;
+      setState(() => _listening = false);
+      _searchAfterVoice();
+    });
   }
 
   void _onSpeechError(SpeechRecognitionError error) {
@@ -113,6 +170,7 @@ class _AddToListScreenState extends State<AddToListScreen> {
 
   @override
   void dispose() {
+    _silenceTimer?.cancel();
     _controller.dispose();
     _speech.stop();
     _textRecognizer.close();
@@ -133,22 +191,13 @@ class _AddToListScreenState extends State<AddToListScreen> {
 
     setState(() {
       _busy = true;
+      _busyText = 'Buscando tus productos en los supermercados…';
       _message = null;
+      _basket = null;
     });
 
     final prefer = context.read<PreferencesController>().suggestion.apiValue;
-    final rows = await Future.wait(entries.map((entry) async {
-      try {
-        final response = await _repository.suggestProducts(entry.searchText, limit: 4, prefer: prefer);
-        return _ReviewRow(
-          heardAs: entry.searchText,
-          options: response.suggestions,
-          quantity: entry.quantity,
-        );
-      } catch (_) {
-        return _ReviewRow(heardAs: entry.searchText, options: const [], quantity: entry.quantity);
-      }
-    }));
+    final rows = await Future.wait(entries.map((entry) => _lookup(entry, prefer)));
 
     if (!mounted) return;
     setState(() {
@@ -157,10 +206,84 @@ class _AddToListScreenState extends State<AddToListScreen> {
     });
   }
 
+  Future<_ReviewRow> _lookup(SpokenListEntry entry, String prefer) async {
+    try {
+      final response = await _repository.suggestProducts(entry.searchText, limit: 4, prefer: prefer);
+      return _ReviewRow(heardAs: entry.searchText, options: response.suggestions, quantity: entry.quantity);
+    } catch (_) {
+      // Un fallo de red no es "producto inexistente": se marca para reintentar.
+      return _ReviewRow(heardAs: entry.searchText, options: const [], quantity: entry.quantity, failed: true);
+    }
+  }
+
+  Future<void> _retryRow(_ReviewRow row) async {
+    final prefer = context.read<PreferencesController>().suggestion.apiValue;
+    final again = await _lookup(SpokenListEntry(quantity: row.quantity, searchText: row.heardAs), prefer);
+    if (!mounted) return;
+    setState(() {
+      row.options = again.options;
+      row.selectedIndex = 0;
+      row.failed = again.failed;
+      row.included = again.options.isNotEmpty;
+    });
+  }
+
+  /// Lista sugerida: pregunta presupuesto y nivel, y arma productos reales.
+  Future<void> _buildSuggested(SuggestedList list) async {
+    final choice = await showBudgetSheet(context, listName: list.name, productCount: list.terms.length);
+    if (choice == null || !mounted) return;
+    _chosenBudget = choice.budget;
+
+    _controller.text = list.asText;
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _busy = true;
+      _busyText = 'Armando "${list.name}" con los mejores precios para tu presupuesto…';
+      _message = null;
+      _basket = null;
+    });
+    try {
+      final basket = await _repository.buildBasket(list.terms, tier: choice.tier, budget: choice.budget);
+      if (!mounted) return;
+      final rows = <_ReviewRow>[
+        for (final line in basket.items)
+          if (line.found && line.product != null)
+            _ReviewRow(
+              heardAs: line.term,
+              options: [ProductSuggestion.fromListItem(line.product!)],
+              quantity: line.quantity,
+            )
+          else
+            _ReviewRow(heardAs: line.term, options: const [], quantity: 1),
+        for (final term in basket.droppedTerms)
+          _ReviewRow(heardAs: term, options: const [], quantity: 1, droppedByBudget: true),
+      ];
+      setState(() {
+        _rows = rows;
+        _basket = basket;
+        _busy = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _message = 'No pudimos armar la lista. Revisa tu conexión e inténtalo de nuevo.';
+      });
+    }
+  }
+
+  /// Total estimado con el mejor precio de cada producto elegido.
+  double get _estimatedTotal => (_rows ?? const <_ReviewRow>[])
+      .where((r) => r.included && r.chosen?.price != null)
+      .fold(0.0, (sum, r) => sum + r.chosen!.price! * r.quantity);
+
   Future<void> _toggleListening() async {
     if (_listening) {
+      // Tocar de nuevo el micrófono = terminé: se apaga y se busca lo dicho.
       await _speech.stop();
+      if (!mounted) return;
       setState(() => _listening = false);
+      _searchAfterVoice();
       return;
     }
     if (!_speechAvailable) {
@@ -175,13 +298,17 @@ class _AddToListScreenState extends State<AddToListScreen> {
       _listening = true;
       _message = null;
     });
+    _voiceSearchPending = true;
+    _armSilenceTimer(); // por si nunca llega a oír nada
 
     await _speech.listen(
       onResult: (result) {
         setState(() => _controller.text = result.recognizedWords);
         if (result.finalResult) {
           setState(() => _listening = false);
-          _search();
+          _searchAfterVoice();
+        } else {
+          _armSilenceTimer(); // cada palabra nueva reinicia la cuenta de 3 s
         }
       },
       // Una frase con varios productos es más larga que una palabra: sin
@@ -270,7 +397,7 @@ class _AddToListScreenState extends State<AddToListScreen> {
         .where((r) => r.included && r.chosen != null)
         .map((r) => MapEntry(r.chosen!.id, r.quantity))
         .toList();
-    Navigator.of(context).pop(result);
+    Navigator.of(context).pop(AddToListResult(result, budget: _basket != null ? _chosenBudget?.round() : null));
   }
 
   @override
@@ -283,47 +410,78 @@ class _AddToListScreenState extends State<AddToListScreen> {
       body: SafeArea(
         child: Column(
           children: [
+            // Una sola tarjeta: la lista se escribe (o se dice, o se fotografía) y se
+            // busca desde la misma tarjeta, sin un botón enorme aparte.
             Padding(
-              padding: const EdgeInsets.all(AppSpacing.horizontalPage),
-              child: TextField(
-                controller: _controller,
-                minLines: 1,
-                maxLines: 4,
-                textInputAction: TextInputAction.search,
-                onSubmitted: (_) => _search(),
-                decoration: InputDecoration(
-                  hintText: _listening ? 'Escuchando...' : 'Ej.: arroz, leche, huevos, aguacate',
-                  prefixIcon: const Icon(Icons.edit_note_rounded),
-                  suffixIcon: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        tooltip: 'Decir la lista',
-                        icon: Icon(
-                          _listening ? Icons.stop_rounded : Icons.mic_none_rounded,
-                          color: _listening ? AppColors.brandIndigo : AppColors.inkMuted,
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.horizontalPage,
+                AppSpacing.md,
+                AppSpacing.horizontalPage,
+                0,
+              ),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: AppColors.white,
+                  borderRadius: BorderRadius.circular(AppSpacing.cardRadius),
+                  border: Border.all(color: AppColors.mist),
+                ),
+                child: Column(
+                  children: [
+                    TextField(
+                      controller: _controller,
+                      minLines: 2,
+                      maxLines: 5,
+                      textCapitalization: TextCapitalization.sentences,
+                      textInputAction: TextInputAction.search,
+                      onSubmitted: (_) => _search(),
+                      decoration: InputDecoration(
+                        hintText: _listening
+                            ? 'Escuchando…'
+                            : 'Escribe tu lista, por ejemplo: arroz, leche y huevos',
+                        border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                        filled: false,
+                        contentPadding: const EdgeInsets.fromLTRB(
+                          AppSpacing.lg,
+                          AppSpacing.md,
+                          AppSpacing.lg,
+                          AppSpacing.sm,
                         ),
-                        onPressed: _toggleListening,
                       ),
-                      IconButton(
-                        tooltip: 'Foto de una lista',
-                        icon: const Icon(Icons.photo_camera_outlined, color: AppColors.inkMuted),
-                        onPressed: _pickPhotoSource,
+                    ),
+                    const Divider(height: 1, color: AppColors.mist),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(AppSpacing.xs, AppSpacing.xs, AppSpacing.sm, AppSpacing.xs),
+                      child: Row(
+                        children: [
+                          IconButton(
+                            tooltip: 'Decir la lista',
+                            icon: Icon(
+                              _listening ? Icons.stop_rounded : Icons.mic_none_rounded,
+                              color: _listening ? AppColors.brandIndigo : AppColors.inkMuted,
+                            ),
+                            onPressed: _toggleListening,
+                          ),
+                          IconButton(
+                            tooltip: 'Foto de una lista',
+                            icon: const Icon(Icons.photo_camera_outlined, color: AppColors.inkMuted),
+                            onPressed: _pickPhotoSource,
+                          ),
+                          const Spacer(),
+                          FilledButton.icon(
+                            onPressed: _busy ? null : _search,
+                            icon: const Icon(Icons.search_rounded, size: 20),
+                            label: const Text('Buscar'),
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.horizontalPage),
-              child: ElevatedButton(
-                onPressed: _busy ? null : _search,
-                child: const Text('Buscar productos'),
-              ),
-            ),
             const SizedBox(height: AppSpacing.sm),
-            const ScopeNote(),
             if (_message != null)
               Padding(
                 padding: const EdgeInsets.all(AppSpacing.horizontalPage),
@@ -348,19 +506,22 @@ class _AddToListScreenState extends State<AddToListScreen> {
                           title: Text(list.name, style: AppText.productName),
                           subtitle: Text('${list.description} · ${list.terms.length} productos', style: AppText.caption),
                           trailing: const Icon(Icons.chevron_right_rounded),
-                          onTap: () {
-                            _controller.text = list.asText;
-                            _search();
-                          },
+                          onTap: () => _buildSuggested(list),
                         ),
                       ),
                   ],
                 ),
               ),
             if (_busy)
-              const Padding(
-                padding: EdgeInsets.all(AppSpacing.xl),
-                child: CircularProgressIndicator(),
+              Padding(
+                padding: const EdgeInsets.all(AppSpacing.xxl),
+                child: Column(
+                  children: [
+                    const CircularProgressIndicator(),
+                    const SizedBox(height: AppSpacing.lg),
+                    Text(_busyText, style: AppText.body, textAlign: TextAlign.center),
+                  ],
+                ),
               ),
             if (!_busy && rows != null) ...[
               Padding(
@@ -373,8 +534,11 @@ class _AddToListScreenState extends State<AddToListScreen> {
                 child: Align(
                   alignment: Alignment.centerLeft,
                   child: Text(
-                    'Propusimos el producto que más supermercados venden. '
-                    'Cámbialo, ajusta la cantidad o quítalo.',
+                    _basket != null
+                        ? 'Elegimos estos productos para tu presupuesto. Cambia cualquiera, '
+                            'ajusta la cantidad o quítalo.'
+                        : 'Propusimos el producto que más supermercados venden. '
+                            'Cámbialo, ajusta la cantidad o quítalo.',
                     style: AppText.caption,
                   ),
                 ),
@@ -387,17 +551,24 @@ class _AddToListScreenState extends State<AddToListScreen> {
                   itemBuilder: (context, index) => _RowTile(
                     row: rows[index],
                     onChanged: () => setState(() {}),
+                    onRetry: () => _retryRow(rows[index]),
                   ),
                 ),
               ),
+              if (selected > 0) _TotalBar(total: _estimatedTotal, basket: _basket),
               Padding(
-                padding: const EdgeInsets.all(AppSpacing.horizontalPage),
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.horizontalPage,
+                  AppSpacing.sm,
+                  AppSpacing.horizontalPage,
+                  AppSpacing.horizontalPage,
+                ),
                 child: ElevatedButton(
                   onPressed: selected > 0 ? _confirm : null,
                   child: Text('Agregar $selected producto${selected == 1 ? '' : 's'}'),
                 ),
               ),
-            ] else
+            ] else if (_busy)
               const Spacer(),
           ],
         ),
@@ -409,20 +580,50 @@ class _AddToListScreenState extends State<AddToListScreen> {
 class _RowTile extends StatelessWidget {
   final _ReviewRow row;
   final VoidCallback onChanged;
+  final VoidCallback onRetry;
 
-  const _RowTile({required this.row, required this.onChanged});
+  const _RowTile({required this.row, required this.onChanged, required this.onRetry});
+
+  /// Abre el buscador completo con lo que se pidió, para elegir cualquier
+  /// producto (no sólo las pocas sugerencias).
+  Future<void> _pick(BuildContext context) async {
+    final item = await showProductPicker(context, initialQuery: row.heardAs);
+    if (item == null) return;
+    row.choose(ProductSuggestion.fromListItem(item));
+    onChanged();
+  }
 
   @override
   Widget build(BuildContext context) {
     final chosen = row.chosen;
 
     if (chosen == null) {
+      final String detail;
+      final IconData icon;
+      final String action;
+      final VoidCallback onAction;
+      if (row.failed) {
+        icon = Icons.wifi_off_rounded;
+        detail = 'No pudimos buscarlo (revisa tu conexión)';
+        action = 'Reintentar';
+        onAction = onRetry;
+      } else if (row.droppedByBudget) {
+        icon = Icons.savings_outlined;
+        detail = 'No alcanzó en tu presupuesto';
+        action = 'Buscar igual';
+        onAction = () => _pick(context);
+      } else {
+        icon = Icons.help_outline_rounded;
+        detail = 'No encontramos este producto en el catálogo';
+        action = 'Buscar a mano';
+        onAction = () => _pick(context);
+      }
       return ListTile(
         contentPadding: EdgeInsets.zero,
-        enabled: false,
-        leading: const Icon(Icons.help_outline_rounded, color: AppColors.inkFaint),
+        leading: Icon(icon, color: row.failed ? AppColors.error : AppColors.inkFaint),
         title: Text('"${row.heardAs}"'),
-        subtitle: const Text('No encontramos este producto en el catálogo'),
+        subtitle: Text(detail),
+        trailing: TextButton(onPressed: onAction, child: Text(action)),
       );
     }
 
@@ -452,20 +653,16 @@ class _RowTile extends StatelessWidget {
                       ' · ${chosen.offersCount} ${chosen.offersCount == 1 ? 'supermercado' : 'supermercados'}',
                       style: AppText.caption,
                     ),
-                    if (row.options.length > 1)
-                      GestureDetector(
-                        onTap: () {
-                          row.showingOptions = !row.showingOptions;
-                          onChanged();
-                        },
-                        child: Padding(
-                          padding: const EdgeInsets.only(top: 2),
-                          child: Text(
-                            row.showingOptions ? 'Ocultar opciones' : 'Cambiar por otra opción',
-                            style: AppText.caption.copyWith(color: AppColors.brandIndigo),
-                          ),
+                    GestureDetector(
+                      onTap: () => _pick(context),
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                          'Cambiar por otra opción',
+                          style: AppText.caption.copyWith(color: AppColors.brandIndigo),
                         ),
                       ),
+                    ),
                   ],
                 ),
               ),
@@ -479,25 +676,6 @@ class _RowTile extends StatelessWidget {
             ],
           ),
         ),
-        if (row.showingOptions)
-          for (var i = 0; i < row.options.length; i++)
-            ListTile(
-              dense: true,
-              leading: Icon(
-                i == row.selectedIndex ? Icons.radio_button_checked : Icons.radio_button_off,
-                color: i == row.selectedIndex ? AppColors.brandIndigo : AppColors.inkFaint,
-              ),
-              onTap: () {
-                row.selectedIndex = i;
-                row.showingOptions = false;
-                onChanged();
-              },
-              title: Text(row.options[i].name, maxLines: 2, overflow: TextOverflow.ellipsis),
-              subtitle: Text(
-                '${row.options[i].price != null ? formatCop(row.options[i].price!) : 'Sin precio'}'
-                ' · ${row.options[i].offersCount} ${row.options[i].offersCount == 1 ? 'supermercado' : 'supermercados'}',
-              ),
-            ),
       ],
     );
   }
@@ -526,6 +704,55 @@ class _Stepper extends StatelessWidget {
           onPressed: () => onChanged(quantity + 1),
         ),
       ],
+    );
+  }
+}
+
+
+/// Total estimado de lo elegido (mejor precio de cada producto) y, si la lista
+/// se armó con un presupuesto, cuánto sobra o cuánto se pasa.
+class _TotalBar extends StatelessWidget {
+  final double total;
+  final BasketResponse? basket;
+
+  const _TotalBar({required this.total, required this.basket});
+
+  @override
+  Widget build(BuildContext context) {
+    final budget = basket?.budget;
+    final diff = budget == null ? null : budget - total;
+    final over = diff != null && diff < 0;
+    final tier = basket == null
+        ? null
+        : (basket!.tierUsed == 'mixto' ? 'Nivel mixto' : 'Nivel ${SpendTier.fromApi(basket!.tierUsed).label.toLowerCase()}');
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: AppSpacing.horizontalPage),
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: over ? AppColors.errorSurface : AppColors.lavenderMist,
+        borderRadius: BorderRadius.circular(AppSpacing.cardRadius),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Estimado desde ${formatCop(total)}', style: AppText.productName),
+                if (tier != null) Text(tier, style: AppText.caption),
+              ],
+            ),
+          ),
+          if (diff != null)
+            Text(
+              over ? 'Te pasas ${formatCop(-diff)}' : 'Te sobran ${formatCop(diff)}',
+              style: AppText.body.copyWith(
+                color: over ? AppColors.error : AppColors.success,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

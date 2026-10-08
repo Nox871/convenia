@@ -72,3 +72,12 @@ def update_user_name(conn: Connection, user_id: int, name: str) -> dict:
     ).mappings().first()
     conn.commit()
     return dict(row)
+
+
+def set_role(conn: Connection, user_id: int, role: str) -> dict:
+    row = conn.execute(
+        text("UPDATE users SET role = :role WHERE id = :id RETURNING id, email, role, name"),
+        {"role": role, "id": user_id},
+    ).mappings().first()
+    conn.commit()
+    return dict(row)

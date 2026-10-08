@@ -82,7 +82,17 @@ def parecido(a: list[str], b: list[str]) -> float:
     return len(sa & sb) / len(sa | sb)
 
 
-def tamano_similar(a: Cantidad | None, b: Cantidad | None) -> bool:
+def distancia_de_tamano(a: Cantidad | None, b: Cantidad | None) -> float:
+    """Qué tan distintos son dos tamaños (0 = iguales, 1 = incomparables)."""
+    if a is None and b is None:
+        return 0.0
+    if a is None or b is None or a.dimension != b.dimension:
+        return 1.0
+    mayor = max(a.valor, b.valor)
+    return 0.0 if mayor == 0 else abs(a.valor - b.valor) / mayor
+
+
+def tamano_similar(a: Cantidad | None, b: Cantidad | None, tolerancia: float = TOLERANCIA_TAMANO) -> bool:
     """Ambos sin cantidad se aceptan (frutas y verduras "por unidad"); si sólo
     uno la tiene, o son de distinta dimensión, no."""
     if a is None and b is None:
@@ -90,7 +100,7 @@ def tamano_similar(a: Cantidad | None, b: Cantidad | None) -> bool:
     if a is None or b is None or a.dimension != b.dimension:
         return False
     mayor = max(a.valor, b.valor)
-    return mayor == 0 or abs(a.valor - b.valor) / mayor <= TOLERANCIA_TAMANO
+    return mayor == 0 or abs(a.valor - b.valor) / mayor <= tolerancia
 
 
 @dataclass(frozen=True)
@@ -125,13 +135,16 @@ def es_mismo_producto(a: Producto, b: Producto) -> bool:
     )
 
 
-def puede_sustituir(original: Producto, candidato: Producto) -> bool:
-    """Mismo tipo de producto y tamaño parecido, pero no el mismo producto."""
+def puede_sustituir(
+    original: Producto, candidato: Producto, tolerancia: float = TOLERANCIA_TAMANO
+) -> bool:
+    """Mismo tipo de producto y tamaño parecido, pero no el mismo producto.
+    `tolerancia` es la diferencia de tamaño aceptada (por defecto, 10 %)."""
     if es_mismo_producto(original, candidato):
         return False
     return (
         parecido(original.base, candidato.base) >= PARECIDO_MINIMO
-        and tamano_similar(original.cantidad, candidato.cantidad)
+        and tamano_similar(original.cantidad, candidato.cantidad, tolerancia)
     )
 
 

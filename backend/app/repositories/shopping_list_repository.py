@@ -237,7 +237,7 @@ def get_cost_breakdown_rows(
             LEFT JOIN LATERAL (
                 SELECT sp.id
                 FROM source_products sp
-                WHERE sp.supermarket_id = s.id
+                WHERE sp.supermarket_id = s.id AND sp.status = 'ACTIVE'
                   AND (
                     (sli.source_product_id IS NOT NULL AND sp.id = sli.source_product_id)
                     OR (
@@ -255,7 +255,7 @@ def get_cost_breakdown_rows(
             LEFT JOIN LATERAL (
                 SELECT price
                 FROM price_observations
-                WHERE source_product_id = elegido.id AND available = TRUE
+                WHERE source_product_id = elegido.id AND available = TRUE AND price > 0
                 ORDER BY observed_at DESC
                 LIMIT 1
             ) po ON elegido.id IS NOT NULL

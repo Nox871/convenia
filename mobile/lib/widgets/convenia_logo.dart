@@ -2,10 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../core/theme.dart';
 
-/// Isotipo de Convenia: caja oscura con esquinas redondeadas que contiene un
-/// símbolo de comparación entre dos alternativas — un nodo neutro (la opción
-/// que no conviene) y un nodo verde (la opción óptima), unidos por una línea
-/// que sugiere "comparar y elegir". No es un ícono genérico de Flutter.
+/// Isotipo de Convenia: el monograma C+V (una C y una V que forman un prisma que
+/// apunta hacia abajo: "elige dónde") en blanco sobre un cuadrado oscuro de
+/// esquinas redondeadas. Es el mismo diseño del ícono de la app.
 class ConveniaMark extends StatelessWidget {
   final double size;
 
@@ -17,54 +16,18 @@ class ConveniaMark extends StatelessWidget {
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: AppColors.ink,
-        borderRadius: BorderRadius.circular(size * 0.28),
+        color: const Color(0xFF0F0F12),
+        borderRadius: BorderRadius.circular(size * 0.22),
       ),
       padding: EdgeInsets.all(size * 0.2),
-      child: CustomPaint(painter: _CompareSymbolPainter()),
+      child: Image.asset(
+        'assets/logo/convenia_mark_white.png',
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.high,
+        semanticLabel: 'Convenia',
+      ),
     );
   }
-}
-
-class _CompareSymbolPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final linePaint = Paint()
-      ..color = AppColors.inkFaint.withValues(alpha: 0.9)
-      ..strokeWidth = size.width * 0.11
-      ..strokeCap = StrokeCap.round;
-
-    final neutralPoint = Offset(0, size.height);
-    final optimalPoint = Offset(size.width, 0);
-
-    canvas.drawLine(neutralPoint, optimalPoint, linePaint);
-
-    final neutralRadius = size.width * 0.16;
-    final optimalRadius = size.width * 0.20;
-
-    canvas.drawCircle(
-      neutralPoint,
-      neutralRadius,
-      Paint()..color = AppColors.inkFaint,
-    );
-
-    canvas.drawCircle(
-      optimalPoint,
-      optimalRadius,
-      Paint()..color = AppColors.success,
-    );
-    canvas.drawCircle(
-      optimalPoint,
-      optimalRadius,
-      Paint()
-        ..color = AppColors.successBorder
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = size.width * 0.045,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 /// Lockup horizontal: isotipo + wordmark "Convenia", para el Home.

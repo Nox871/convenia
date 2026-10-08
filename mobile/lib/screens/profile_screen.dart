@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/theme.dart';
+import '../widgets/app_sheets.dart';
 import '../models/auth.dart';
 import '../state/auth_controller.dart';
 import '../state/coverage_controller.dart';
@@ -117,7 +118,7 @@ class ProfileScreen extends StatelessWidget {
               ),
             ],
             const SizedBox(height: AppSpacing.xl),
-            Center(child: Text('Convenia — versión 0.1.0', style: AppText.caption)),
+            Center(child: Text('Convenia — versión 3.0.0', style: AppText.caption)),
           ],
         ),
       ),
@@ -126,25 +127,14 @@ class ProfileScreen extends StatelessWidget {
 }
 
 Future<void> _editName(BuildContext context, AuthController auth) async {
-  final controller = TextEditingController(text: auth.currentUser!.hasName ? auth.currentUser!.displayName : '');
-  final name = await showDialog<String>(
-    context: context,
-    builder: (dialogContext) => AlertDialog(
-      title: const Text('Editar nombre'),
-      content: TextField(
-        controller: controller,
-        autofocus: true,
-        textCapitalization: TextCapitalization.words,
-        decoration: const InputDecoration(labelText: 'Nombre'),
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.of(dialogContext).pop(), child: const Text('Cancelar')),
-        ElevatedButton(
-          onPressed: () => Navigator.of(dialogContext).pop(controller.text.trim()),
-          child: const Text('Guardar'),
-        ),
-      ],
-    ),
+  final name = await showTextSheet(
+    context,
+    title: 'Editar nombre',
+    subtitle: 'Así te saludamos en la app.',
+    initial: auth.currentUser!.hasName ? auth.currentUser!.displayName : '',
+    label: 'Nombre',
+    icon: Icons.person_outline_rounded,
+    capitalization: TextCapitalization.words,
   );
   if (name != null && name.isNotEmpty) await auth.updateName(name);
 }

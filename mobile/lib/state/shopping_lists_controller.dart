@@ -13,10 +13,20 @@ import 'view_status.dart';
 class ShoppingListsController extends ChangeNotifier {
   final ShoppingListRepository _repository;
 
-  ShoppingListsController({ShoppingListRepository? repository, int? accountId})
+  ShoppingListsController({ShoppingListRepository? repository, int? accountId, Listenable? refreshSignal})
     : _repository = repository ?? ShoppingListRepository(),
-      _accountId = accountId {
+      _accountId = accountId,
+      _refreshSignal = refreshSignal {
+    _refreshSignal?.addListener(refresh);
     _load();
+  }
+
+  final Listenable? _refreshSignal;
+
+  @override
+  void dispose() {
+    _refreshSignal?.removeListener(refresh);
+    super.dispose();
   }
 
   /// Cuenta cuyas listas se muestran (`null` = invitado, listas del dispositivo).
@@ -37,6 +47,21 @@ class ShoppingListsController extends ChangeNotifier {
 
   Future<void> retry() => _load();
 
+  /// Vuelve a pedir las listas SIN mostrar la rueda de carga: se usa al volver
+  /// de una lista o al abrir la pestaña, para que los conteos no queden viejos
+  /// (agregabas productos y Mis listas seguía diciendo "0 productos").
+  Future<void> refresh() async {
+    try {
+      final ownerRef = await DeviceId.get();
+      final result = await _repository.listLists(ownerRef);
+      lists = result;
+      status = result.isEmpty ? ViewStatus.empty : ViewStatus.loaded;
+      notifyListeners();
+    } on ApiException {
+      // Se conserva lo que ya se mostraba.
+    }
+  }
+
   Future<void> _load() async {
     status = ViewStatus.loading;
     notifyListeners();
@@ -52,6 +77,20 @@ class ShoppingListsController extends ChangeNotifier {
     }
 
     notifyListeners();
+  }
+
+  /// Elimina una lista (y sus productos) y recarga las que quedan.
+  Future<bool> deleteList(int listId) async {
+    try {
+      final ownerRef = await DeviceId.get();
+      await _repository.deleteList(listId, ownerRef);
+      await refresh();
+      return true;
+    } on ApiException catch (e) {
+      errorMessage = e.message;
+      notifyListeners();
+      return false;
+    }
   }
 
   /// Devuelve el id de la lista creada, o null si falló (el error queda en

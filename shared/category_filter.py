@@ -310,3 +310,62 @@ def clasificar_categoria(texto: str | None) -> tuple[bool, str]:
             return True, f"incluida por palabra clave '{palabra}'"
 
     return False, "no coincide con ninguna palabra clave (rechazo por defecto)"
+
+
+# ============================================================
+# MARKETPLACE (vendedores externos)
+# ============================================================
+#
+# Los sitios VTEX de Éxito y Carulla mezclan en sus listados los productos de
+# vendedores externos (su "marketplace"): la URL del producto termina en
+# "-mp" (ej. ".../mueble-de-aseo-jalisco-104990319-mp/p"). No son productos
+# del supermercado ni están en sus estantes, y traen basura (muebles,
+# dispensadores, tapetes) que contamina categorías, homologación y
+# comparaciones: en "Aseo del hogar" de Éxito son el 30 % de los productos.
+# Un comparador de supermercados incluye sólo lo que vende el supermercado.
+
+_MARKETPLACE_URL = re.compile(r"-mp/?(?:\?.*)?$|-mp/p/?(?:\?.*)?$", re.IGNORECASE)
+
+
+def es_producto_de_marketplace(product_url: str | None) -> bool:
+    """True si la URL del producto es de un vendedor externo (termina en -mp)."""
+    if not product_url:
+        return False
+    ruta = str(product_url).split("#", 1)[0]
+    return bool(_MARKETPLACE_URL.search(ruta))
+
+
+# ============================================================
+# PRODUCTOS QUE NO SON DE CANASTA (aparatos, muebles)
+# ============================================================
+#
+# Las categorías de aseo de Éxito traen, sobre todo de su marketplace,
+# artículos duraderos que no son de canasta familiar: muebles, aspiradoras,
+# batidores eléctricos, dispensadores. Se descartan por lo que SON (el nombre
+# empieza por ese artículo), no por quién los vende: el café, los huevos o el
+# chocolate de un vendedor externo sí son canasta y se conservan. Se mira el
+# inicio del nombre para no tocar productos legítimos que sólo lo mencionan
+# ("limpiador de muebles", "jabón líquido con dispensador").
+
+_NO_CANASTA_INICIO = re.compile(
+    r"^(?:(?:set|juego|kit|combo|pack)\s+(?:x?\d+\s+)?(?:de\s+)?)?"
+    r"(?:mini\s+|mega\s+)?(?:mueble|muebles|aspiradora|aspiradoras|dispensador|dispensadores|"
+    r"batidor\s+electrico|licuadora|cafetera|freidora|ventilador|plancha\s+electrica|"
+    r"trapeadora\s+a\s+vapor|robot|estufa|nevera|lavadora|"
+    # Artículos de ferretería/hogar que D1 archiva en "aseo":
+    r"bombillos?|baterias?|pilas?\s+(?:alcalinas?|recargables?|aaa?|c|d|9v|boton|duracell|energizer)|encendedor(?:es)?|rallador|lubricante|sombrillas?|"
+    r"organizador(?:es)?|carrito|cabo\s+de\s+madera|"
+    r"bolsas?\s+de\s+papel|bolsas?\s+(?:(?:roja|ecologica|verde)\s+)?reutilizables?|bolsas?\s+ecologicas?)\b"
+)
+
+# Línea de hogar/ferretería de D1 (bolsas de lavandería, organizadores,
+# sombrillas, lubricante de cadena, ralladores): no es aseo ni canasta.
+_MARCAS_NO_CANASTA = {"red flag", "redflag"}
+
+
+def es_producto_no_canasta(nombre: str | None, marca: str | None = None) -> bool:
+    """True si el producto es un mueble, aparato o artículo de hogar, no de canasta."""
+    if marca and normalizar_texto(marca) in _MARCAS_NO_CANASTA:
+        return True
+    texto = normalizar_texto(nombre)
+    return bool(texto) and bool(_NO_CANASTA_INICIO.search(texto))

@@ -34,7 +34,8 @@ class ApiClient {
   /// Rutas que muestran precios por supermercado y, por eso, se limitan a
   /// los supermercados al alcance.
   static bool _isScoped(String path) =>
-      path.startsWith('/api/v1/products') || RegExp(r'^/api/v1/lists/\d+/(cost|savings)').hasMatch(path);
+      path.startsWith('/api/v1/products') ||
+      path.startsWith('/api/v1/categories') || RegExp(r'^/api/v1/lists/\d+/(cost|savings|single-store)').hasMatch(path);
 
   Map<String, String> _headers() {
     final headers = {'Content-Type': 'application/json'};

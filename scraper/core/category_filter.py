@@ -15,6 +15,8 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from shared.category_filter import (  # noqa: F401,E402
+    es_producto_de_marketplace,
+    es_producto_no_canasta,
     ETIQUETAS_AMIGABLES,
     FACTOR_PAGINAS_ALTA_DENSIDAD,
     PALABRAS_ALTA_DENSIDAD,

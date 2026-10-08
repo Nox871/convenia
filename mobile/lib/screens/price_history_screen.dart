@@ -2,12 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/formatters.dart';
+import '../core/price_trend.dart';
 import '../core/theme.dart';
 import '../models/price_history_monthly_response.dart';
 import '../models/price_history_response.dart';
 import '../repositories/product_repository.dart';
 import '../state/price_history_monthly_controller.dart';
 import '../state/view_status.dart';
+import '../widgets/price_line_chart.dart';
 import '../widgets/state_views.dart';
 
 /// Pantalla "Historial" -- resumen mensual con barras verticales (altura ∝
@@ -57,7 +59,7 @@ class _HistoryBody extends StatelessWidget {
           onGoBack: () => Navigator.of(context).maybePop(),
         );
       case ViewStatus.loaded:
-        return _MonthlyChart(productId: productId, months: controller.months);
+        return _MonthlyChart(productId: productId, months: controller.months, daily: controller.daily);
     }
   }
 }
@@ -65,8 +67,9 @@ class _HistoryBody extends StatelessWidget {
 class _MonthlyChart extends StatelessWidget {
   final String productId;
   final List<PriceHistoryMonthlyPoint> months;
+  final List<DailyPrice> daily;
 
-  const _MonthlyChart({required this.productId, required this.months});
+  const _MonthlyChart({required this.productId, required this.months, required this.daily});
 
   static const _barMaxHeight = 140.0;
   static const _barWidth = 40.0;
@@ -108,6 +111,10 @@ class _MonthlyChart extends StatelessWidget {
             ],
           ),
         ),
+        if (daily.isNotEmpty) ...[
+          const SizedBox(height: AppSpacing.xl),
+          _TrendSection(daily: daily),
+        ],
         const SizedBox(height: AppSpacing.xl),
         Text('Resumen mensual', style: AppText.sectionTitle),
         const SizedBox(height: AppSpacing.md),
@@ -312,7 +319,7 @@ class _MonthDetailSheetState extends State<_MonthDetailSheet> {
                 ],
               ),
               const SizedBox(height: AppSpacing.sm),
-              Text('${point.observationsCount} observaciones', style: AppText.caption),
+              Text('${point.observationsCount} ${point.observationsCount == 1 ? 'día' : 'días'} con precio', style: AppText.caption),
               const Divider(height: AppSpacing.xxl),
               if (_loading)
                 const Center(child: Padding(
@@ -393,6 +400,126 @@ class _ObservationRow extends StatelessWidget {
           Text(formatCop(observation.price), style: AppText.priceCard),
         ],
       ),
+    );
+  }
+}
+
+
+/// "Evolución del precio": línea día a día con selector de rango y, cuando hay
+/// suficientes días, la tendencia estimada. Con pocos días no se estima nada.
+class _TrendSection extends StatefulWidget {
+  final List<DailyPrice> daily;
+
+  const _TrendSection({required this.daily});
+
+  @override
+  State<_TrendSection> createState() => _TrendSectionState();
+}
+
+class _TrendSectionState extends State<_TrendSection> {
+  int? _rangeDays = 30; // null = todo
+
+  List<DailyPrice> get _visible {
+    final days = _rangeDays;
+    if (days == null) return widget.daily;
+    final corte = widget.daily.last.day.subtract(Duration(days: days));
+    final filtradas = widget.daily.where((p) => !p.day.isBefore(corte)).toList();
+    return filtradas.isEmpty ? widget.daily : filtradas;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final serie = _visible;
+    final trend = estimateTrend(widget.daily);
+    final proyeccion = trend?.projection ?? const <DailyPrice>[];
+
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      decoration: BoxDecoration(
+        color: AppColors.white,
+        borderRadius: BorderRadius.circular(AppSpacing.cardRadius),
+        border: Border.all(color: AppColors.mist),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Evolución del precio', style: AppText.sectionTitle),
+          const SizedBox(height: AppSpacing.xs),
+          Text('Mejor precio de cada día. Toca o arrastra para ver una fecha.', style: AppText.caption),
+          const SizedBox(height: AppSpacing.md),
+          Wrap(
+            spacing: AppSpacing.sm,
+            children: [
+              for (final opcion in const [(30, '30 días'), (90, '90 días'), (-1, 'Todo')])
+                ChoiceChip(
+                  label: Text(opcion.$2),
+                  selected: (opcion.$1 == -1 ? null : opcion.$1) == _rangeDays,
+                  onSelected: (_) => setState(() => _rangeDays = opcion.$1 == -1 ? null : opcion.$1),
+                ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.md),
+          PriceLineChart(series: serie, projection: proyeccion),
+          const SizedBox(height: AppSpacing.md),
+          _TrendNote(daysWithData: widget.daily.length, trend: trend),
+        ],
+      ),
+    );
+  }
+}
+
+class _TrendNote extends StatelessWidget {
+  final int daysWithData;
+  final TrendEstimate? trend;
+
+  const _TrendNote({required this.daysWithData, required this.trend});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = trend;
+    if (t == null) {
+      final faltan = minDaysForTrend - daysWithData;
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.hourglass_empty_rounded, size: 16, color: AppColors.inkMuted),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              'Llevamos $daysWithData ${daysWithData == 1 ? 'día' : 'días'} de datos de este producto. '
+              'La tendencia se estima desde $minDaysForTrend días: faltan $faltan.',
+              style: AppText.caption.copyWith(color: AppColors.inkMuted),
+            ),
+          ),
+        ],
+      );
+    }
+
+    final porcentaje = t.weeklyPercent.abs().toStringAsFixed(1).replaceAll('.', ',');
+    final (icono, color, texto) = switch (t.direction) {
+      TrendDirection.up => (Icons.trending_up_rounded, AppColors.error, 'Tendencia al alza: cerca de $porcentaje % por semana'),
+      TrendDirection.down => (Icons.trending_down_rounded, AppColors.success, 'Tendencia a la baja: cerca de $porcentaje % por semana'),
+      TrendDirection.stable => (Icons.trending_flat_rounded, AppColors.inkMuted, 'Precio estable: casi no cambia por semana'),
+      TrendDirection.unclear => (Icons.show_chart_rounded, AppColors.inkMuted, 'El precio sube y baja sin un patrón claro'),
+    };
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(icono, size: 18, color: color),
+            const SizedBox(width: 6),
+            Expanded(child: Text(texto, style: AppText.body.copyWith(color: color, fontWeight: FontWeight.w600))),
+          ],
+        ),
+        if (t.projection.isNotEmpty) ...[
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            'La línea punteada es una estimación con los últimos días, no una garantía de precios futuros.',
+            style: AppText.caption.copyWith(color: AppColors.inkMuted),
+          ),
+        ],
+      ],
     );
   }
 }

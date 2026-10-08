@@ -1,3 +1,5 @@
+import 'product_list_item.dart';
+
 /// Espejo de `app.schemas.product.ProductSuggestion`/`ProductSuggestResponse`.
 ///
 /// Resultado de la búsqueda tolerante a errores (`/products/suggest`), usada
@@ -22,6 +24,18 @@ class ProductSuggestion {
     this.price,
     this.offersCount = 1,
   });
+
+  /// Un producto elegido a mano (por ejemplo, desde el buscador) se trata igual
+  /// que una propuesta del servidor.
+  factory ProductSuggestion.fromListItem(ProductListItem item) => ProductSuggestion(
+        id: item.id,
+        name: item.name,
+        brand: item.brand,
+        score: 1,
+        imageUrl: item.imageUrl,
+        price: item.price,
+        offersCount: item.offers.isNotEmpty ? item.offers.length : item.offersCount,
+      );
 
   factory ProductSuggestion.fromJson(Map<String, dynamic> json) {
     return ProductSuggestion(

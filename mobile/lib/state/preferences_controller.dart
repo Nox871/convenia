@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/travel_mode.dart';
+
 /// Ubicación que la persona eligió a mano (por ejemplo, porque no da
 /// permiso de GPS). Se guarda sólo en este teléfono.
 class ManualLocation {
@@ -42,6 +44,7 @@ class PreferencesController extends ChangeNotifier {
   static const _latKey = 'manual_latitude';
   static const _lonKey = 'manual_longitude';
   static const _labelKey = 'manual_location_label';
+  static const _travelKey = 'travel_mode';
 
   /// Distancias entre las que puede elegir la persona (km).
   static const distanceOptionsKm = [1.0, 2.0, 5.0, 10.0, 20.0];
@@ -51,6 +54,9 @@ class PreferencesController extends ChangeNotifier {
   double maxDistanceKm = 5.0;
 
   SuggestionPreference suggestion = SuggestionPreference.comparable;
+
+  /// Cómo suele ir a las tiendas (para los tiempos de llegada).
+  TravelMode travelMode = TravelMode.walking;
 
   /// Si está definida, se usa en lugar del GPS.
   ManualLocation? manualLocation;
@@ -64,6 +70,7 @@ class PreferencesController extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       final saved = prefs.getString(_key);
       final savedDistance = prefs.getDouble(_distanceKey);
+      travelMode = TravelMode.fromName(prefs.getString(_travelKey));
       final lat = prefs.getDouble(_latKey);
       final lon = prefs.getDouble(_lonKey);
       if (lat != null && lon != null) {
@@ -91,6 +98,16 @@ class PreferencesController extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_key, value.apiValue);
+    } catch (_) {}
+  }
+
+  Future<void> setTravelMode(TravelMode mode) async {
+    if (mode == travelMode) return;
+    travelMode = mode;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_travelKey, mode.name);
     } catch (_) {}
   }
 

@@ -47,7 +47,11 @@ class _RootShellState extends State<RootShell> {
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
+        onDestinationSelected: (i) {
+          setState(() => _index = i);
+          // Listas: al abrir la pestaña se recargan, por si cambió algo en otra pantalla.
+          if (i == 1) ShoppingListsScreen.refreshSignal.value++;
+        },
         backgroundColor: AppColors.white,
         indicatorColor: AppColors.lavenderMist,
         destinations: const [

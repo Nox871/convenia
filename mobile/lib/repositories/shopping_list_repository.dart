@@ -1,3 +1,4 @@
+import '../models/single_store.dart';
 import '../models/swap_suggestion.dart';
 import '../models/shopping_list.dart';
 import '../services/api_client.dart';
@@ -127,5 +128,17 @@ class ShoppingListRepository {
       queryParameters: {'owner_ref': ownerRef},
     );
     return ShoppingListDistributedResponse.fromJson(json);
+  }
+
+  /// Cómo comprar la lista en UN solo supermercado: qué le falta a cada uno y con qué
+  /// producto parecido de esa misma tienda se completa.
+  Future<List<SingleStoreOption>> getSingleStoreOptions(int listId, String ownerRef) async {
+    final json = await _client.getJson(
+      '/api/v1/lists/$listId/single-store',
+      queryParameters: {'owner_ref': ownerRef},
+    );
+    return (json['options'] as List<dynamic>)
+        .map((e) => SingleStoreOption.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 }

@@ -1,7 +1,7 @@
 name: convenia_mobile
 description: "Convenia — Antes de comprar, elige dónde. App móvil de comparación de precios entre supermercados."
 publish_to: "none"
-version: 0.1.0
+version: 3.0.0+1
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -34,3 +34,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/logo/

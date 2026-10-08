@@ -1,4 +1,5 @@
 import asyncio
+import os
 import json
 import re
 import sys
@@ -28,7 +29,12 @@ _SCRAPER_ROOT = Path(__file__).resolve().parents[2]
 if str(_SCRAPER_ROOT) not in sys.path:
     sys.path.insert(0, str(_SCRAPER_ROOT))
 
-from core.category_filter import clasificar_categoria, factor_paginas, obtener_bucket  # noqa: E402
+from core.category_filter import (  # noqa: E402
+    clasificar_categoria,
+    es_producto_no_canasta,
+    factor_paginas,
+    obtener_bucket,
+)
 from core.raw_writer import guardar_raw_snapshot  # noqa: E402
 
 
@@ -40,8 +46,8 @@ SOURCE = "JUMBO"
 
 DOMINIO_BASE = "https://www.jumbocolombia.com"
 
-MAX_CATEGORIAS = 60
-MAX_PAGINAS_POR_CATEGORIA = 2
+MAX_CATEGORIAS = 150
+MAX_PAGINAS_POR_CATEGORIA = 200  # techo de seguridad; el corte real es la primera página sin productos
 
 # VTEX permite consultar hasta 50 productos por petición.
 PRODUCTOS_POR_PETICION = 50
@@ -59,6 +65,14 @@ DELAY_ENTRE_PRODUCTOS = 0.10
 
 # Reintentos HTTP.
 MAX_REINTENTOS = 3
+
+# Las consultas al catálogo de VTEX a veces fallan en el servidor ("HTTP 500: The operation
+# was canceled"). Una página que falla NO es el final de la categoría: se reintenta con
+# espera creciente y, si sigue fallando, se salta y se marca la categoría como incompleta.
+MAX_REINTENTOS_VTEX = 5
+ESPERA_REINTENTO_VTEX = 4.0
+MAX_PAGINAS_FALLIDAS_SEGUIDAS = 3
+CATEGORIAS_INCOMPLETAS: list[str] = []
 
 # Timeout HTTP.
 HTTP_TIMEOUT = 60.0
@@ -833,6 +847,35 @@ def construir_url_pagina_categoria(
 # FASE 1 - DESCUBRIR CATEGORÍAS
 # ============================================================
 
+async def _urls_desde_arbol_api():
+    """Todas las URLs de categoría desde el árbol de la API de Jumbo (VTEX).
+
+    Respaldo para cuando la página principal no entrega enlaces (en el
+    servidor llegó sin menú): no necesita navegador."""
+    import httpx
+
+    url = f"{DOMINIO_BASE.rstrip('/')}/api/catalog_system/pub/category/tree/3"
+    try:
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as http:
+            respuesta = await http.get(url, headers={"User-Agent": "Mozilla/5.0"})
+            respuesta.raise_for_status()
+            arbol = respuesta.json()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[FASE 1] Tampoco se pudo leer el árbol de categorías: {exc}")
+        return []
+
+    urls = []
+
+    def recorrer(nodos):
+        for nodo in nodos:
+            if nodo.get("url"):
+                urls.append(normalizar_url(nodo["url"]))
+            recorrer(nodo.get("children", []))
+
+    recorrer(arbol)
+    return urls
+
+
 async def descubrir_categorias(
     crawler
 ):
@@ -882,14 +925,14 @@ async def descubrir_categorias(
             f"{resultado.error_message}"
         )
 
-        return []
-
-    enlaces = (
-        resultado.links.get(
-            "internal",
-            []
+        enlaces = []
+    else:
+        enlaces = (
+            resultado.links.get(
+                "internal",
+                []
+            )
         )
-    )
 
     candidatas = []
     vistas = set()
@@ -905,6 +948,14 @@ async def descubrir_categorias(
 
         vistas.add(url)
         candidatas.append(url)
+
+    if not candidatas:
+        print("[FASE 1] La página principal no entregó enlaces; se usa el árbol de categorías de la API.")
+        for url in await _urls_desde_arbol_api():
+            if url in vistas or not es_url_comercial(url):
+                continue
+            vistas.add(url)
+            candidatas.append(url)
 
     aceptadas = []
     descartadas = []
@@ -1032,7 +1083,7 @@ async def consultar_vtex(
 
     for intento in range(
         1,
-        MAX_REINTENTOS + 1
+        MAX_REINTENTOS_VTEX + 1
     ):
 
         try:
@@ -1067,11 +1118,11 @@ async def consultar_vtex(
                     if (
                         intento
                         <
-                        MAX_REINTENTOS
+                        MAX_REINTENTOS_VTEX
                     ):
 
                         await asyncio.sleep(
-                            intento * 1.5
+                            intento * ESPERA_REINTENTO_VTEX
                         )
 
                     continue
@@ -1116,6 +1167,12 @@ async def consultar_vtex(
 
                 return []
 
+            # VTEX no deja pedir más allá de 2.500 productos por consulta: es el final
+            # natural de una categoría enorme, no un error (y reintentar no sirve).
+            if status == 400 and "greater than 2500" in response.text:
+
+                return []
+
             ultimo_error = (
                 f"HTTP {status}: "
                 f"{response.text[:500]}"
@@ -1141,20 +1198,21 @@ async def consultar_vtex(
         if (
             intento
             <
-            MAX_REINTENTOS
+            MAX_REINTENTOS_VTEX
         ):
 
             await asyncio.sleep(
-                intento * 1.5
+                intento * ESPERA_REINTENTO_VTEX
             )
 
     print(
         "[VTEX] Error después de "
-        f"{MAX_REINTENTOS} intentos: "
+        f"{MAX_REINTENTOS_VTEX} intentos: "
         f"{ultimo_error}"
     )
 
-    return []
+    # None = FALLÓ (distinto de [] = la categoría terminó): quien llama no debe cerrarla.
+    return None
 
 
 # ============================================================
@@ -1400,7 +1458,19 @@ def extraer_precios(
                 precio_raw
             )
 
-            if precio is None:
+            # Oferta sin precio, con precio 0 o sin stock: no es una oferta
+            # (ver el comentario equivalente en exito/scraper.py).
+            if precio is None or precio <= 0:
+
+                continue
+
+            stock_raw = (
+                offer.get("AvailableQuantity")
+                if offer.get("AvailableQuantity") is not None
+                else offer.get("availableQuantity")
+            )
+            stock = convertir_numero(stock_raw)
+            if stock is not None and stock <= 0:
 
                 continue
 
@@ -2143,6 +2213,29 @@ def extraer_payment_methods(
 # CATEGORÍA
 # ============================================================
 
+def extraer_ean(producto):
+    """Código de barras que publica la tienda (items[].ean). Se prefiere el de
+    la variante con oferta vigente; la validación (dígito verificador, códigos
+    internos) se hace en el ETL con shared.ean."""
+    items = producto.get("items", [])
+    if not isinstance(items, list):
+        return None
+    primero = None
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        ean = str(item.get("ean") or "").strip()
+        if not ean:
+            continue
+        if primero is None:
+            primero = ean
+        for seller in item.get("sellers", []) or []:
+            offer = seller.get("commertialOffer", {}) if isinstance(seller, dict) else {}
+            if isinstance(offer, dict) and (offer.get("Price") or 0) > 0 and (offer.get("AvailableQuantity") or 0) > 0:
+                return ean
+    return primero
+
+
 def extraer_categoria(
     producto
 ):
@@ -2466,6 +2559,7 @@ def construir_producto(
 
         "product_reference_code":
             product_reference,
+        "ean": extraer_ean(producto),
 
         "category_id":
             category_id,
@@ -2539,10 +2633,21 @@ def construir_producto(
 # ENRIQUECER PRODUCTO
 # ============================================================
 
+# Leer la página de cada producto (PDP) sólo sirve para los métodos de pago
+# promocionales (descuentos con tarjeta): el precio, nombre, marca y categoría
+# ya vienen de la API. Cuesta 8-13 s por producto, así que la corrida diaria
+# la apaga con SCRAPER_ENRIQUECER_PDP=0 (con el catálogo completo, sin
+# apagarla, se pasaba del límite de 6 horas y se perdía todo lo leído).
+ENRIQUECER_PDP = os.getenv("SCRAPER_ENRIQUECER_PDP", "1") != "0"
+
+
 async def enriquecer_producto_con_pagina(
     crawler,
     producto,
 ):
+    if not ENRIQUECER_PDP:
+        return producto
+
 
     product_url = producto.get(
         "product_url"
@@ -2881,6 +2986,9 @@ async def procesar_categoria(
             f"{max_paginas} páginas (en vez de {MAX_PAGINAS_POR_CATEGORIA})."
         )
 
+    paginas_fallidas = 0
+    categoria_incompleta = False
+
     for pagina in range(
         1,
         max_paginas + 1,
@@ -2921,6 +3029,28 @@ async def procesar_categoria(
             time.perf_counter()
             - inicio
         )
+
+        if data is None:
+
+            # La consulta falló tras todos los reintentos: NO es el final de la categoría.
+            paginas_fallidas += 1
+            categoria_incompleta = True
+            print(
+                f"[PAGINACIÓN] Página {pagina} falló; se salta "
+                f"({paginas_fallidas} seguidas)."
+            )
+
+            if paginas_fallidas >= MAX_PAGINAS_FALLIDAS_SEGUIDAS:
+
+                break
+
+            await asyncio.sleep(
+                DELAY_ENTRE_PETICIONES * 5
+            )
+
+            continue
+
+        paginas_fallidas = 0
 
         print(
             "[VTEX] Productos recibidos: "
@@ -2965,6 +3095,23 @@ async def procesar_categoria(
             f"{len(productos_validos)}"
         )
 
+        # Fuera muebles y aparatos que no son de canasta (ver
+        # shared/category_filter.es_producto_no_canasta).
+        antes_nc = len(productos_validos)
+        productos_validos = [
+            producto
+            for producto in productos_validos
+            if not es_producto_no_canasta(producto.get("product_name") or producto.get("name"))
+        ]
+        # Sin oferta vigente (agotado): no se guarda; en la base queda como no disponible.
+        productos_validos = [p for p in productos_validos if p.get("price")]
+        if antes_nc != len(productos_validos):
+            print(
+                f"[FILTRO NO-CANASTA] Descartados muebles/aparatos: "
+                f"{antes_nc - len(productos_validos)}"
+            )
+
+
         # ----------------------------------------------------
         # PDP
         # ----------------------------------------------------
@@ -2997,6 +3144,15 @@ async def procesar_categoria(
 
         await asyncio.sleep(
             DELAY_ENTRE_PETICIONES
+        )
+
+    if categoria_incompleta:
+
+        CATEGORIAS_INCOMPLETAS.append(categoria_url)
+
+        print(
+            "[CATEGORÍA INCOMPLETA] Hubo páginas que fallaron en: "
+            f"{categoria_url}"
         )
 
     productos_categoria = (
@@ -3329,6 +3485,7 @@ async def main():
         print(f"  Categorías aceptadas:    {ESTADISTICAS_CATEGORIAS['aceptadas']}")
         print(f"  Categorías descartadas:  {ESTADISTICAS_CATEGORIAS['descartadas']}")
         print(f"  Productos obtenidos:     {len(productos_totales)}")
+        print(f"  Categorías incompletas:  {len(CATEGORIAS_INCOMPLETAS)}")
 
         print()
 

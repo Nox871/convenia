@@ -45,11 +45,14 @@ def source_product_ids_for_label(conn: Connection, label: str) -> list[int]:
     return [fila["id"] for fila, etiqueta in _clasificar(conn) if etiqueta == label]
 
 
-def list_categories(conn: Connection) -> CategoryListResponse:
+def list_categories(conn: Connection, supermarket_codes: list[str] | None = None) -> CategoryListResponse:
     productos_por_etiqueta: dict[str, int] = defaultdict(int)
     supermercados_por_etiqueta: dict[str, set[str]] = defaultdict(set)
 
     for fila, etiqueta in _clasificar(conn):
+        # Sólo cuentan los supermercados al alcance (None = sin filtro).
+        if supermarket_codes is not None and fila["supermarket_code"] not in supermarket_codes:
+            continue
         productos_por_etiqueta[etiqueta] += 1
         supermercados_por_etiqueta[etiqueta].add(fila["supermarket_code"])
 

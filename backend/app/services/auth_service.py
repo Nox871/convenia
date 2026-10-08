@@ -9,6 +9,7 @@ from google.oauth2 import id_token as google_id_token
 from jwt import PyJWTError
 from sqlalchemy.engine import Connection
 
+from app.core.admin_list import debe_ser_admin
 from app.core.config import settings
 from app.core.exceptions import ConflictError, InvalidParameterError, UnauthorizedError
 from app.core.security import create_access_token, decode_access_token, hash_password, verify_password
@@ -18,6 +19,18 @@ from app.schemas.auth import TokenResponse, UserPublic
 logger = logging.getLogger("app.services.auth")
 
 _google_request = google_requests.Request()
+
+
+def _aplicar_lista_de_admins(conn: Connection, user: dict) -> dict:
+    """Si el correo está en ADMIN_EMAILS y aún no es admin, lo sube de rol.
+
+    Sólo promueve: nunca quita el rol. El cambio queda guardado en la base, así
+    que después de que la persona entre una vez ya se puede quitar su correo de
+    la lista."""
+    if user.get("role") != "admin" and debe_ser_admin(user.get("email"), settings.admin_emails):
+        logger.info("Usuario %s promovido a admin por ADMIN_EMAILS", user["id"])
+        return {**user, **user_repository.set_role(conn, user["id"], "admin")}
+    return user
 
 
 def register(
@@ -39,6 +52,7 @@ def register(
     user = user_repository.create_user(
         conn, email=email, password_hash=hash_password(password), name=clean_name or None
     )
+    user = _aplicar_lista_de_admins(conn, user)
     token = create_access_token(user["id"])
     return TokenResponse(access_token=token, user=UserPublic(**user))
 
@@ -54,6 +68,7 @@ def login(conn: Connection, email: str, password: str) -> TokenResponse:
     if not verify_password(password, user["password_hash"]):
         raise UnauthorizedError("Correo o contraseña incorrectos")
 
+    user = _aplicar_lista_de_admins(conn, user)
     token = create_access_token(user["id"])
     return TokenResponse(access_token=token, user=UserPublic(id=user["id"], email=user["email"], role=user["role"], name=user["name"]))
 
@@ -97,6 +112,7 @@ def login_with_google(conn: Connection, google_id_token_str: str) -> TokenRespon
     if user.get("name") is None and google_name:
         user = user_repository.update_user_name(conn, user["id"], google_name)
 
+    user = _aplicar_lista_de_admins(conn, user)
     token = create_access_token(user["id"])
     return TokenResponse(
         access_token=token,

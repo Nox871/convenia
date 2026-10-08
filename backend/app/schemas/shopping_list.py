@@ -86,6 +86,10 @@ class SupermarketCost(BaseModel):
     is_complete: bool = Field(
         ..., description="True si TODOS los ítems de la lista tienen precio en este supermercado"
     )
+    missing_item_ids: list[int] = Field(
+        default_factory=list,
+        description="Ids de los ítems de la lista que NO tienen precio en este supermercado",
+    )
 
 
 class ShoppingListCostResponse(BaseModel):
@@ -149,3 +153,30 @@ class SwapSuggestionsResponse(BaseModel):
     list_id: int
     suggestions: list[SwapSuggestion]
     total_saving: float
+
+
+class SingleStoreReplacement(BaseModel):
+    item_id: int
+    item_name: str
+    quantity: int
+    substitute: SwapAlternative | None = Field(
+        None, description="Producto parecido que sí vende este supermercado; null si no hay uno claro"
+    )
+
+
+class SingleStoreOption(BaseModel):
+    supermarket_code: str
+    supermarket_name: str
+    items_total: int
+    items_priced: int = Field(..., description="Cuántos ítems de la lista ya tienen precio aquí, tal cual")
+    current_total: float = Field(..., description="Costo de los ítems que sí tienen precio aquí")
+    completable: bool = Field(..., description="True si a todo lo que falta se le encontró un reemplazo")
+    total_if_replaced: float | None = Field(
+        None, description="Costo de la lista completa en este supermercado con los reemplazos; null si no es completable"
+    )
+    replacements: list[SingleStoreReplacement] = Field(default_factory=list)
+
+
+class SingleStoreResponse(BaseModel):
+    list_id: int
+    options: list[SingleStoreOption]

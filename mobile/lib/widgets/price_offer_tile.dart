@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../core/formatters.dart';
 import '../core/theme.dart';
 import '../models/price_offer.dart';
+import 'price_with_discount.dart';
 import 'supermarket_badge.dart';
 
 /// Fila de una oferta dentro de "Disponibilidad"/"Precios registrados" del detalle.
@@ -37,6 +38,9 @@ class PriceOfferTile extends StatelessWidget {
       );
     }
 
+    // No se muestra la fecha del dato: el precio que se ve es siempre el último conocido.
+    final unavailable = offer.available == false;
+
     return Container(
       padding: const EdgeInsets.all(AppSpacing.md),
       decoration: BoxDecoration(
@@ -52,57 +56,23 @@ class PriceOfferTile extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        'Observado el ${_formatDate(offer.observedAt!)}',
-                        style: AppText.caption,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    if (offer.isStale) ...[
-                      const SizedBox(width: 4),
-                      const Icon(Icons.schedule_rounded, size: 12, color: AppColors.inkFaint),
-                    ],
-                  ],
-                ),
-                if (offer.isStale)
-                  const Text(
-                    'Dato desactualizado',
-                    style: TextStyle(fontSize: 11, color: AppColors.inkFaint),
-                  ),
-                if (offer.available == false)
-                  const Text(
-                    'No disponible actualmente',
-                    style: TextStyle(fontSize: 11, color: AppColors.error),
-                  ),
+                if (unavailable)
+                  const Text('No disponible actualmente', style: TextStyle(fontSize: 12, color: AppColors.error)),
               ],
             ),
           ),
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text(
-                formatCop(offer.price!),
-                style: AppText.priceCard.copyWith(
-                  color: isBest ? AppColors.success : AppColors.ink,
-                ),
+              PriceWithDiscount(
+                label: formatCop(offer.price!),
+                price: offer.price!,
+                listPrice: offer.listPrice,
+                muted: true, // ya dentro del producto, el precio anterior no debe llamar la atención
+                style: AppText.priceCard.copyWith(color: isBest ? AppColors.success : AppColors.ink),
               ),
-              if (offer.unitPrice != null && offer.unitLabel != null)
-                Text(
-                  '${formatCop(offer.unitPrice!)} ${offer.unitLabel}',
-                  style: AppText.caption,
-                ),
-              if (offer.listPrice != null && offer.listPrice! > offer.price!)
-                Text(
-                  formatCop(offer.listPrice!),
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: AppColors.inkFaint,
-                    decoration: TextDecoration.lineThrough,
-                  ),
-                ),
+              // Sin precio por kilo/litro: aquí se comparan tiendas para el MISMO producto y
+              // tamaño, así que ese número es proporcional al precio y sólo confundía.
             ],
           ),
           if (isBest) ...[
@@ -112,12 +82,5 @@ class PriceOfferTile extends StatelessWidget {
         ],
       ),
     );
-  }
-
-  String _formatDate(DateTime date) {
-    final local = date.toLocal();
-    final day = local.day.toString().padLeft(2, '0');
-    final month = local.month.toString().padLeft(2, '0');
-    return '$day/$month/${local.year}';
   }
 }

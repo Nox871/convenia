@@ -33,6 +33,11 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+            // R8 no encuentra las clases de otros idiomas del reconocedor de texto
+            // (solo usamos el modelo Latin) y falla la minificación; se desactiva
+            // en vez de mantener reglas de ProGuard sólo para esto.
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }

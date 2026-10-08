@@ -17,8 +17,10 @@ void main() {
       find.textContaining(RegExp(r'^Buenos días|^Buenas tardes|^Buenas noches')),
       findsOneWidget,
     );
-    expect(find.text('¿Qué producto estás buscando?'), findsOneWidget);
-    expect(find.text('Buscar'), findsOneWidget);
+    expect(find.text('¿Qué producto buscas?'), findsOneWidget);
+    // La pantalla de inicio es sencilla: sin el botón "Buscar" aparte ni el texto de ejemplo.
+    expect(find.text('Buscar'), findsNothing);
+    expect(find.textContaining('Ejemplo:'), findsNothing);
 
     // Búsquedas frecuentes.
     expect(find.text('Leche'), findsOneWidget);

@@ -9,3 +9,8 @@ User=conve-admin
 ExecStart=/bin/bash /home/conve-admin/convenia/deploy/run_daily.sh
 TimeoutStartSec=12h
 Nice=10
+# Tope de memoria para esta corrida: deja margen para la API y PostgreSQL en
+# los 4 GB del servidor. Si se pasa, systemd la mata antes de que tumbe todo
+# lo demás.
+MemoryMax=3G
+OOMPolicy=kill

@@ -63,10 +63,17 @@ void main() {
     expect(requested.single.queryParameters.containsKey('supermarkets'), isFalse);
   });
 
-  test('categorías, tiendas y sesión nunca se filtran', () async {
-    ApiClient.scopeResolver = () async => ['D1'];
+  test('las categorías SÍ se filtran por alcance (sus conteos son de lo que está a tu alcance)', () async {
+    ApiClient.scopeResolver = () async => ['D1', 'EXITO'];
 
     await client.getJson('/api/v1/categories');
+
+    expect(requested.single.queryParameters['supermarkets'], 'D1,EXITO');
+  });
+
+  test('tiendas, sesión y listas nunca se filtran', () async {
+    ApiClient.scopeResolver = () async => ['D1'];
+
     await client.getJson('/api/v1/stores/nearby', queryParameters: {'lat': '1', 'lon': '2'});
     await client.getJson('/api/v1/auth/me');
     await client.getJson('/api/v1/lists', queryParameters: {'owner_ref': 'x'});

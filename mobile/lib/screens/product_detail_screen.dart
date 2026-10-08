@@ -4,11 +4,11 @@ import 'package:provider/provider.dart';
 import '../core/theme.dart';
 import '../state/product_detail_controller.dart';
 import '../state/view_status.dart';
-import '../widgets/scope_note.dart';
 import '../widgets/comparison_banner.dart';
 import '../widgets/price_offer_tile.dart';
 import '../widgets/add_to_list_sheet.dart';
 import '../widgets/product_image.dart';
+import '../widgets/scope_note.dart';
 import '../widgets/state_views.dart';
 import 'price_history_screen.dart';
 
@@ -24,7 +24,15 @@ class ProductDetailScreen extends StatelessWidget {
       create: (_) => ProductDetailController(productId: productId),
       child: Scaffold(
         appBar: AppBar(title: Text('Comparación', style: AppText.screenTitle)),
-        body: SafeArea(child: _DetailBody(fallbackName: productName)),
+        // Si cambia el alcance (distancia/ubicación) se vuelve a pedir la comparación.
+        body: SafeArea(
+          child: Builder(
+            builder: (context) => ScopeReloader(
+              onChanged: context.read<ProductDetailController>().retry,
+              child: _DetailBody(fallbackName: productName),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -65,12 +73,9 @@ class _DetailBody extends StatelessWidget {
         // Nunca "Todas las ofertas": son observaciones de precio, no ofertas
         // comerciales, y el título debe reflejar honestamente cuántas hay.
         final seccionTitulo = conDatos <= 1 ? 'Disponibilidad' : 'Precios registrados';
-        // Con 0-1 ofertas reales, mostrar filas "Sin datos" de las demás
-        // tiendas no ayuda a decidir (es obvio que un producto de una sola
-        // tienda no está en las otras) -- sólo satura la pantalla. Con 2+
-        // ofertas reales, sí vale la pena mostrar dónde NO está disponible.
-        final offersToShow =
-            conDatos <= 1 ? sortedOffers.where((o) => o.hasData).toList() : sortedOffers;
+        // Solo las tiendas que tienen el producto: una fila "Sin datos" no ayuda
+        // a decidir dónde comprar, así que nunca se muestra.
+        final offersToShow = sortedOffers.where((o) => o.hasData).toList();
 
         return SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(
@@ -105,12 +110,9 @@ class _DetailBody extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: AppSpacing.lg),
-              ScopeNote(padded: false, onChanged: controller.retry),
-              const SizedBox(height: AppSpacing.lg),
               ComparisonBanner(
                 offers: comparison.offers,
                 bestPrice: comparison.bestPrice,
-                isPartial: comparison.isPartial,
                 savingsAbsolute: comparison.savingsAbsolute,
                 savingsPercentage: comparison.savingsPercentage,
               ),

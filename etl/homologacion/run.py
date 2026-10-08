@@ -62,7 +62,14 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from scraper.core.category_filter import obtener_bucket  # noqa: E402
+# Se agrupa por la ETIQUETA AMIGABLE (nombre del producto, con el pasillo como
+# respaldo) y no por el pasillo crudo: dos supermercados archivan el mismo
+# tipo de producto bajo pasillos distintos (ej. huevos bajo "Lácteos" en uno y
+# bajo "Huevos" en otro), y agrupar por pasillo los mandaba a "buckets"
+# distintos que nunca se comparaban entre sí -- perdiendo homologaciones
+# válidas en silencio. `categoria_de_producto` es la misma regla que ya usa
+# el backend para mostrarle la categoría al consumidor.
+from shared.category_producto import categoria_de_producto  # noqa: E402
 
 logger = logging.getLogger("homologacion")
 
@@ -96,7 +103,7 @@ def _cargar_productos_canonicos(conn):
 
 def _normalizado_desde_canonico(product_id: int, name: str, brand: str | None,
                                  category: str | None) -> ProductoNormalizado | None:
-    bucket = obtener_bucket(category)
+    bucket = categoria_de_producto(name, category)
     if bucket is None:
         return None
     # source_product_id negativo (sentinel): nunca choca con un id real de
@@ -431,6 +438,154 @@ def _procesar_bucket(conn, bucket: str, productos: list[ProductoNormalizado],
         stats["sin_candidato"] += len(grupo) - homologados
 
 
+_PRIORIDAD_ANCLA = {"EXITO": 0, "CARULLA": 1, "JUMBO": 2, "OLIMPICA": 3, "D1": 4}
+
+
+def _homologar_por_ean(conn, stats: dict) -> None:
+    """Paso 0: une por CÓDIGO DE BARRAS productos de tiendas distintas.
+
+    Mismo EAN = mismo artículo del fabricante, sin depender de cómo cada tienda
+    escribe el nombre (orden de palabras, abreviaturas, "malla multiusos" contra
+    "esponja doble uso"). Sólo toca productos activos SIN match previo, y respeta
+    las mismas reglas del resto de la homologación: a lo sumo un producto activo
+    por supermercado en cada canónico, y si el nombre trae una cantidad
+    distinta (un catálogo que reutiliza el EAN para otra presentación) el enlace
+    queda en REVIEW y no se muestra como comparable.
+
+    Lo que no se une aquí sigue al comparador por nombre, como antes."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT sp.id, s.code, sp.name_raw, sp.brand_raw, sp.ean, sc.name_raw,
+                   pm.product_id, pm.status
+            FROM source_products sp
+            JOIN supermarkets s ON s.id = sp.supermarket_id
+            LEFT JOIN source_categories sc ON sc.id = sp.source_category_id
+            LEFT JOIN product_matches pm ON pm.source_product_id = sp.id
+            WHERE sp.is_active = TRUE AND sp.ean IS NOT NULL
+            """
+        )
+        filas = cur.fetchall()
+
+    por_ean = defaultdict(list)
+    for sp_id, code, name_raw, brand_raw, ean, categoria, product_id, status in filas:
+        por_ean[ean].append((sp_id, code, name_raw, brand_raw, categoria, product_id, status))
+
+    for ean, miembros in por_ean.items():
+        if len({m[1] for m in miembros}) < 2:
+            continue
+        sin_match = [m for m in miembros if m[5] is None]
+        if not sin_match:
+            continue
+
+        def normalizado(m):
+            bucket = categoria_de_producto(m[2], m[4])
+            if bucket is None:
+                return None  # fuera de canasta
+            return construir_normalizado(m[0], m[1], m[2], m[3], bucket)
+
+        confirmados = [m for m in miembros if m[5] is not None and m[6] == "CONFIRMED"]
+        orden = lambda m: (_PRIORIDAD_ANCLA.get(m[1], 9), m[0])  # noqa: E731
+
+        if confirmados:
+            # Ya hay un canónico para este código: se suman los que faltan.
+            target = min({m[5] for m in confirmados})
+            ref_m = min((m for m in confirmados if m[5] == target), key=orden)
+            referencia = normalizado(ref_m)
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT s.code FROM product_matches pm
+                    JOIN source_products sp ON sp.id = pm.source_product_id AND sp.status = 'ACTIVE'
+                    JOIN supermarkets s ON s.id = sp.supermarket_id
+                    WHERE pm.product_id = %s AND pm.status = 'CONFIRMED'
+                    """,
+                    (target,),
+                )
+                ocupadas = {r[0] for r in cur.fetchall()}
+            candidatos = sorted(sin_match, key=orden)
+            creado = False
+        else:
+            # Ninguno tiene canónico: se crea uno si al menos dos tiendas coinciden.
+            candidatos = sorted(sin_match, key=orden)
+            ancla_m = None
+            for m in candidatos:
+                if normalizado(m) is not None:
+                    ancla_m = m
+                    break
+            if ancla_m is None:
+                continue
+            referencia = normalizado(ancla_m)
+            equivalentes = {
+                m[1] for m in candidatos
+                if (n := normalizado(m)) is not None and _cantidad_equivalente(referencia, n)
+            }
+            if len(equivalentes) < 2:
+                continue
+            with conn:
+                target = _crear_producto(conn, referencia, ancla_m[4])
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE products SET barcode = %s WHERE id = %s", (ean, target))
+            stats["products_creados"] += 1
+            stats["products_creados_por_ean"] += 1
+            ocupadas = set()
+            creado = True
+
+        vistos = set(ocupadas)
+        for m in candidatos:
+            if m[1] in vistos:
+                continue
+            n = normalizado(m)
+            if n is None:
+                continue
+            equivalente = referencia is None or _cantidad_equivalente(referencia, n)
+            status = "CONFIRMED" if equivalente else "REVIEW"
+            metodo = "ean" if equivalente else "ean+cantidad_distinta"
+            with conn:
+                _insertar_match(conn, m[0], target, metodo, 1.0 if equivalente else 0.6, status)
+            if status == "CONFIRMED":
+                vistos.add(m[1])
+                stats["matches_por_ean"] += 1
+            stats["source_products_homologados"] += 1
+
+
+def _refrescar_nombres_canonicos(conn) -> int:
+    """Si el nombre de un producto canónico ya no coincide con ninguno de sus
+    productos activos, lo reemplaza por el de uno de ellos.
+
+    El canónico toma su nombre del primer producto que lo creó; si ese producto
+    cambia de id o sale del catálogo, el grupo se quedaba con un nombre que ya
+    no describe lo que agrupa (un "doble uso anatómica" mostrando precios de una
+    "malla multiusos"). Se prefiere el nombre de Éxito o Carulla, que escriben
+    marca y presentación de forma más limpia."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE products p SET name = x.name_raw, updated_at = now()
+            FROM (
+                SELECT DISTINCT ON (pm.product_id) pm.product_id, sp.name_raw
+                FROM product_matches pm
+                JOIN source_products sp ON sp.id = pm.source_product_id AND sp.status = 'ACTIVE'
+                JOIN supermarkets s ON s.id = sp.supermarket_id
+                WHERE pm.status = 'CONFIRMED'
+                ORDER BY pm.product_id,
+                         CASE s.code WHEN 'EXITO' THEN 0 WHEN 'CARULLA' THEN 1
+                                     WHEN 'JUMBO' THEN 2 WHEN 'OLIMPICA' THEN 3 ELSE 4 END,
+                         sp.id
+            ) x
+            WHERE p.id = x.product_id
+              AND NOT EXISTS (
+                  SELECT 1 FROM product_matches pm2
+                  JOIN source_products sp2 ON sp2.id = pm2.source_product_id AND sp2.status = 'ACTIVE'
+                  WHERE pm2.product_id = p.id AND pm2.status = 'CONFIRMED'
+                    AND lower(sp2.name_raw) = lower(p.name)
+              )
+            RETURNING p.id
+            """
+        )
+        return len(cur.fetchall())
+
+
 def ejecutar() -> dict:
     stats = {
         "candidatos_por_supermercado": defaultdict(int),
@@ -441,9 +596,14 @@ def ejecutar() -> dict:
         "matches_review": 0,
         "sin_candidato": 0,
         "enlazados_a_canonico_existente": 0,
+        "nombres_actualizados": 0,
+        "matches_por_ean": 0,
+        "products_creados_por_ean": 0,
     }
 
     with db.get_connection() as conn:
+        stats["nombres_actualizados"] = _refrescar_nombres_canonicos(conn)
+        _homologar_por_ean(conn, stats)
         filas = _cargar_no_resueltos(conn)
 
         canonicos_por_bucket = defaultdict(list)
@@ -459,7 +619,7 @@ def ejecutar() -> dict:
             sp_id, code, name_raw, brand_raw, category_name = row
             categoria_por_id[sp_id] = category_name
 
-            bucket = obtener_bucket(category_name)
+            bucket = categoria_de_producto(name_raw, category_name)
             if bucket is None:
                 stats["sin_bucket"] += 1
                 continue
@@ -502,6 +662,9 @@ def main():
         print(f"  {code:10s} {n}")
     print(f"Descartados sin bucket de categoría:   {stats['sin_bucket']}")
     print(f"Enlazados a canónico existente:        {stats['enlazados_a_canonico_existente']}")
+    print(f"Nombres de canónicos actualizados:     {stats['nombres_actualizados']}")
+    print(f"Unidos por código de barras (EAN):     {stats['matches_por_ean']} "
+          f"({stats['products_creados_por_ean']} canónicos nuevos)")
     print(f"Productos canónicos creados:           {stats['products_creados']}")
     print(f"  - source_products homologados:       {stats['source_products_homologados']}")
     print(f"  - grupos con al menos un CONFIRMED:   {stats['matches_confirmed']}")

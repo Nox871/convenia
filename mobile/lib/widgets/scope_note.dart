@@ -172,3 +172,39 @@ class ScopeNote extends StatelessWidget {
     );
   }
 }
+
+
+/// Envuelve una pantalla que muestra precios: cuando cambia el conjunto de
+/// supermercados al alcance (por ejemplo, al cambiar la distancia en Perfil o
+/// cuando la ubicación termina de resolverse), llama a [onChanged] para que la
+/// pantalla vuelva a pedir sus datos. Sin esto, la pantalla seguía mostrando
+/// precios de tiendas que ya no estaban al alcance.
+class ScopeReloader extends StatefulWidget {
+  final VoidCallback onChanged;
+  final Widget child;
+
+  const ScopeReloader({super.key, required this.onChanged, required this.child});
+
+  @override
+  State<ScopeReloader> createState() => _ScopeReloaderState();
+}
+
+class _ScopeReloaderState extends State<ScopeReloader> {
+  String? _key;
+
+  @override
+  Widget build(BuildContext context) {
+    final coverage = context.watch<CoverageController>();
+    final key = coverage.status == CoverageStatus.ready ? coverage.scope?.join(',') : null;
+    if (key != null && key != _key) {
+      final changed = _key != null;
+      _key = key;
+      if (changed) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) widget.onChanged();
+        });
+      }
+    }
+    return widget.child;
+  }
+}

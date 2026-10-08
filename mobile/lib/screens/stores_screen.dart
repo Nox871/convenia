@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/theme.dart';
+import '../core/travel_mode.dart';
 import '../models/physical_store.dart';
 import '../state/auth_controller.dart';
 import '../state/nearby_stores_controller.dart';
@@ -173,6 +174,7 @@ class _StoresBody extends StatelessWidget {
                   ],
                 ),
               ),
+            const _TravelModeBar(),
             Expanded(
               child: ListView.separated(
                 padding: const EdgeInsets.fromLTRB(
@@ -225,8 +227,11 @@ class _StoresBody extends StatelessWidget {
                                 _distanceLabel(store),
                                 style: AppText.priceCard.copyWith(fontSize: 14),
                               ),
-                              if (_walkingLabel(store) != null)
-                                Text(_walkingLabel(store)!, style: AppText.caption),
+                              Text(
+                                '${context.watch<PreferencesController>().travelMode.label}: '
+                                '~${context.watch<PreferencesController>().travelMode.durationLabel(store.distanceKm)}',
+                                style: AppText.caption,
+                              ),
                             ],
                           ),
                         ],
@@ -269,14 +274,10 @@ String _distanceLabel(NearbyStore store) => store.distanceKm < 1
     ? '${(store.distanceKm * 1000).round()} m'
     : '${store.distanceKm.toStringAsFixed(1)} km';
 
-/// Caminar sólo es una opción real para distancias cortas.
-String? _walkingLabel(NearbyStore store) =>
-    store.distanceKm <= 3 ? 'a pie: ~${store.walkingMinutes} min' : null;
-
-Future<void> _openDirections(BuildContext context, NearbyStore store) async {
+Future<void> _openDirections(BuildContext context, NearbyStore store, TravelMode mode) async {
   final uri = Uri.parse(
     'https://www.google.com/maps/dir/?api=1&destination=${store.latitude},${store.longitude}'
-    '&travelmode=${store.distanceKm <= 3 ? 'walking' : 'driving'}',
+    '&travelmode=${mode.googleMode}',
   );
   var opened = false;
   try {
@@ -290,37 +291,110 @@ Future<void> _openDirections(BuildContext context, NearbyStore store) async {
 }
 
 void _showStoreSheet(BuildContext context, NearbyStore store) {
-  final walking = _walkingLabel(store);
+  final prefs = context.read<PreferencesController>();
   showModalBottomSheet<void>(
     context: context,
-    builder: (sheetContext) => Padding(
-      padding: const EdgeInsets.all(AppSpacing.xl),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(store.supermarketName, style: AppText.screenTitle),
-          const SizedBox(height: AppSpacing.xs),
-          Text(_placeLine(store), style: AppText.body),
-          const SizedBox(height: AppSpacing.xs),
-          Text(
-            walking == null ? _distanceLabel(store) : '${_distanceLabel(store)} · $walking',
-            style: AppText.caption,
+    showDragHandle: true,
+    builder: (sheetContext) => StatefulBuilder(
+      builder: (sheetContext, setSheetState) {
+        final selected = prefs.travelMode;
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(AppSpacing.xl, 0, AppSpacing.xl, AppSpacing.xl),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(store.supermarketName, style: AppText.screenTitle),
+              const SizedBox(height: AppSpacing.xs),
+              Text(_placeLine(store), style: AppText.body),
+              const SizedBox(height: AppSpacing.xs),
+              Text('A ${_distanceLabel(store)} de ti', style: AppText.caption),
+              const SizedBox(height: AppSpacing.lg),
+              // Tocar un medio lo elige: cambia el tiempo destacado y el botón de abajo.
+              Row(
+                children: [
+                  for (final mode in TravelMode.values)
+                    Expanded(
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(AppSpacing.cardRadius),
+                        onTap: () {
+                          prefs.setTravelMode(mode);
+                          setSheetState(() {});
+                        },
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 3),
+                          padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+                          decoration: BoxDecoration(
+                            color: mode == selected ? AppColors.lavenderMist : Colors.transparent,
+                            borderRadius: BorderRadius.circular(AppSpacing.cardRadius),
+                            border: Border.all(color: mode == selected ? AppColors.brandIndigo : AppColors.mist),
+                          ),
+                          child: Column(
+                            children: [
+                              Icon(mode.icon, color: mode == selected ? AppColors.brandIndigo : AppColors.inkMuted),
+                              const SizedBox(height: 2),
+                              Text(
+                                mode.durationLabel(store.distanceKm),
+                                style: AppText.productName.copyWith(
+                                  fontSize: 13,
+                                  color: mode == selected ? AppColors.brandIndigo : AppColors.ink,
+                                ),
+                              ),
+                              Text(mode.label, style: AppText.caption),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.xs),
+              Text('Tiempos aproximados, sin tráfico. Toca un medio para cambiarlo.', style: AppText.caption),
+              const SizedBox(height: AppSpacing.lg),
+              ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.of(sheetContext).pop();
+                  _openDirections(context, store, prefs.travelMode);
+                },
+                icon: Icon(selected.icon),
+                label: Text('Cómo llegar · ${selected.label}'),
+                style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(AppSpacing.buttonHeight)),
+              ),
+            ],
           ),
-          const SizedBox(height: AppSpacing.lg),
-          ElevatedButton.icon(
-            onPressed: () {
-              Navigator.of(sheetContext).pop();
-              _openDirections(context, store);
-            },
-            icon: const Icon(Icons.directions_rounded),
-            label: const Text('Cómo llegar'),
-            style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(AppSpacing.buttonHeight)),
-          ),
-        ],
-      ),
+        );
+      },
     ),
   );
+}
+
+/// Medio de transporte con el que se calculan los tiempos de llegada.
+class _TravelModeBar extends StatelessWidget {
+  const _TravelModeBar();
+
+  @override
+  Widget build(BuildContext context) {
+    final prefs = context.watch<PreferencesController>();
+    return SizedBox(
+      height: 44,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.horizontalPage),
+        children: [
+          for (final mode in TravelMode.values)
+            Padding(
+              padding: const EdgeInsets.only(right: AppSpacing.sm),
+              child: ChoiceChip(
+                avatar: Icon(mode.icon, size: 18),
+                label: Text(mode.label),
+                selected: prefs.travelMode == mode,
+                onSelected: (_) => prefs.setTravelMode(mode),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 }
 
 class _Notice extends StatelessWidget {
@@ -413,16 +487,12 @@ class _StoresMap extends StatelessWidget {
                 if (store.latitude != null && store.longitude != null)
                   Marker(
                     point: LatLng(store.latitude!, store.longitude!),
-                    width: 160,
-                    height: 56,
-                    alignment: Alignment.bottomCenter,
+                    // Área táctil pequeña: con una grande los pines cercanos se pisan.
+                    width: 34,
+                    height: 34,
                     child: GestureDetector(
                       onTap: () => _showStoreSheet(context, store),
-                      child: const Icon(
-                        Icons.location_on_rounded,
-                        color: AppColors.ink,
-                        size: 36,
-                      ),
+                      child: _StorePin(name: store.supermarketName),
                     ),
                   ),
             ],
@@ -475,6 +545,33 @@ class _InfoPanel extends StatelessWidget {
             TextButton(onPressed: onRetry, child: const Text('Reintentar')),
           ],
         ),
+      ),
+    );
+  }
+}
+
+
+/// Pin de una tienda: un círculo con la inicial del supermercado. Más pequeño y
+/// legible que un pin negro idéntico para todas las cadenas.
+class _StorePin extends StatelessWidget {
+  final String name;
+
+  const _StorePin({required this.name});
+
+  @override
+  Widget build(BuildContext context) {
+    final initial = name.trim().isEmpty ? '?' : name.trim()[0].toUpperCase();
+    return Container(
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: AppColors.ink,
+        border: Border.all(color: AppColors.white, width: 2.5),
+        boxShadow: const [BoxShadow(color: Color(0x33000000), blurRadius: 4, offset: Offset(0, 1))],
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        initial,
+        style: const TextStyle(color: AppColors.white, fontWeight: FontWeight.w800, fontSize: 14),
       ),
     );
   }

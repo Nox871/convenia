@@ -5,6 +5,7 @@ import '../core/theme.dart';
 import '../models/shopping_list.dart';
 import '../repositories/shopping_list_repository.dart';
 import '../screens/shopping_list_detail_screen.dart';
+import 'create_list_sheet.dart';
 
 /// Bottom sheet para agregar `productId` a una lista existente o a una
 /// nueva. Se usa desde la pantalla de Detalle/Comparación. Al terminar deja
@@ -80,24 +81,7 @@ class _AddToListSheetState extends State<_AddToListSheet> {
   }
 
   Future<void> _createAndAdd() async {
-    final nameController = TextEditingController();
-    final name = await showDialog<String>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Nueva lista'),
-        content: TextField(controller: nameController, autofocus: true),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('Cancelar'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.of(dialogContext).pop(nameController.text.trim()),
-            child: const Text('Crear'),
-          ),
-        ],
-      ),
-    );
+    final name = await showCreateListSheet(context);
     if (name == null || name.isEmpty) return;
 
     setState(() => _busy = true);

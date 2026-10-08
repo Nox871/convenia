@@ -8,9 +8,19 @@ from sqlalchemy.engine import Connection
 from app.core.exceptions import InvalidParameterError, NotFoundError
 from app.core.ownership import USER_PREFIX
 from app.core.product_ref import encode_canonical_ref, encode_source_ref, parse_product_ref
-from app.core.swap_matching import Producto, es_mas_barato, puede_sustituir
+from app.core.swap_matching import (
+    Producto,
+    distancia_de_tamano,
+    es_mas_barato,
+    parecido,
+    es_mismo_producto,
+    puede_sustituir,
+)
 from app.repositories import price_repository, shopping_list_repository
 from app.schemas.shopping_list import (
+    SingleStoreOption,
+    SingleStoreReplacement,
+    SingleStoreResponse,
     DistributedPlanItem,
     DistributedPlanStop,
     ShoppingListBudget,
@@ -177,10 +187,13 @@ def get_cost(
                 "supermarket_name": fila["supermarket_name"],
                 "total": 0.0,
                 "items_priced": 0,
+                "missing_item_ids": [],
             }
         if fila["price"] is not None:
             por_supermercado[sid]["total"] += float(fila["price"]) * fila["quantity"]
             por_supermercado[sid]["items_priced"] += 1
+        else:
+            por_supermercado[sid]["missing_item_ids"].append(fila["item_id"])
 
     costs = [
         SupermarketCost(
@@ -190,6 +203,7 @@ def get_cost(
             items_priced=datos["items_priced"],
             items_total=items_totales,
             is_complete=datos["items_priced"] == items_totales,
+            missing_item_ids=sorted(set(datos["missing_item_ids"])),
         )
         for datos in por_supermercado.values()
     ]
@@ -386,3 +400,165 @@ def get_swap_suggestions(
         suggestions=sugerencias,
         total_saving=round(sum(s.saving_total for s in sugerencias), 2),
     )
+
+
+# Al completar una lista en UN supermercado la persona acepta otra marca y un tamaño
+# un poco distinto, pero nunca otro tipo de producto: la tolerancia de tamaño es
+# mayor que la de "cómo ahorrar", y el parecido del tipo sigue siendo el mismo.
+TOLERANCIA_TAMANO_UNA_TIENDA = 0.35
+
+
+def _raiz(palabra: str) -> str:
+    """papas -> papa, cafes -> cafe: para reconocer el mismo tipo en singular y plural."""
+    return palabra[:-1] if len(palabra) > 4 and palabra.endswith("s") else palabra
+
+
+def _mejor_sustituto(
+    item: dict, codigo_tienda: str, candidatos: dict, precio_referencia: float | None = None
+) -> dict | None:
+    """El producto de ESA tienda que mejor reemplaza a `item`. Siempre intenta
+    encontrar uno, en tres niveles de más a menos estricto:
+
+    1. mismo tipo de producto (nombre muy parecido) y tamaño parecido;
+    2. el mismo tipo de producto aunque la marca, el sabor o el tamaño cambien
+       (otro pollo, otro café, otras papas);
+    3. el mismo tipo en cualquier presentación.
+
+    Dentro de un nivel gana el más parecido y, entre iguales, el de precio más
+    cercano al que la persona ya tenía: si armó una lista económica no se le
+    sube a un producto premium, y al revés."""
+    original = Producto(nombre=item["name"], marca=item.get("brand"))
+    base = original.base
+    if not base:
+        return None
+    raiz = _raiz(base[0])
+    de_la_tienda = [
+        (o, c) for lista in candidatos.values() for o, c in lista if o["supermarket_code"] == codigo_tienda
+    ]
+
+    def cercania_precio(oferta: dict) -> float:
+        if not precio_referencia:
+            return oferta["price"]
+        return abs(oferta["price"] - precio_referencia) / precio_referencia
+
+    def elegir(validos) -> dict | None:
+        mejor, mejor_clave = None, None
+        for oferta, candidato in validos:
+            clave = (
+                -round(parecido(original.base, candidato.base), 1),
+                round(cercania_precio(oferta), 1),
+                distancia_de_tamano(original.cantidad, candidato.cantidad),
+            )
+            if mejor_clave is None or clave < mejor_clave:
+                mejor, mejor_clave = oferta, clave
+        return mejor
+
+    estricto = [
+        (o, c) for o, c in candidatos.get(base[0], [])
+        if o["supermarket_code"] == codigo_tienda
+        and puede_sustituir(original, c, TOLERANCIA_TAMANO_UNA_TIENDA)
+    ]
+    if (hallado := elegir(estricto)) is not None:
+        return hallado
+
+    mismo_tipo = [
+        (o, c) for o, c in de_la_tienda
+        if any(_raiz(w) == raiz for w in c.base) and not es_mismo_producto(original, c)
+    ]
+    misma_dimension = [
+        (o, c) for o, c in mismo_tipo
+        if original.cantidad is None
+        or (c.cantidad is not None and c.cantidad.dimension == original.cantidad.dimension)
+    ]
+    return elegir(misma_dimension) or elegir(mismo_tipo)
+
+
+def get_single_store_options(
+    conn: Connection, list_id: int, owner_ref: str, supermarket_codes: list[str] | None = None
+) -> SingleStoreResponse:
+    """Cómo comprar la lista en UN solo supermercado: para cada tienda al alcance
+    que tenga algo de la lista, qué le falta y con qué producto parecido de esa
+    misma tienda se puede reemplazar, y cuánto costaría la lista completa así.
+
+    No inventa nada: un ítem sin reemplazo claro queda sin sustituto y la tienda
+    deja de ser "completable". Nada se cambia solo; la app aplica los reemplazos
+    que la persona confirme."""
+    _ensure_list_owned(conn, list_id, owner_ref)
+
+    items = shopping_list_repository.get_items(conn, list_id)
+    filas = shopping_list_repository.get_cost_breakdown_rows(conn, list_id, supermarket_codes)
+    if not items or not filas:
+        return SingleStoreResponse(list_id=list_id, options=[])
+
+    precios: dict[tuple[int, str], float] = {}
+    tiendas: dict[str, str] = {}
+    for fila in filas:
+        tiendas[fila["supermarket_code"]] = fila["supermarket_name"]
+        if fila["price"] is not None:
+            precios[(fila["item_id"], fila["supermarket_code"])] = float(fila["price"])
+
+    candidatos = _swap_candidates(conn, supermarket_codes)
+
+    opciones: list[SingleStoreOption] = []
+    for codigo, nombre in tiendas.items():
+        con_precio = 0
+        total_actual = 0.0
+        reemplazos: list[SingleStoreReplacement] = []
+        completable = True
+        total_con_reemplazos = 0.0
+
+        for item in items:
+            precio = precios.get((item["id"], codigo))
+            if precio is not None:
+                con_precio += 1
+                total_actual += precio * item["quantity"]
+                total_con_reemplazos += precio * item["quantity"]
+                continue
+            conocidos = [v for (iid, _c), v in precios.items() if iid == item["id"]]
+            referencia = sum(conocidos) / len(conocidos) if conocidos else None
+            sustituto = _mejor_sustituto(item, codigo, candidatos, referencia)
+            alternativa = None
+            if sustituto is None:
+                completable = False
+            else:
+                total_con_reemplazos += sustituto["price"] * item["quantity"]
+                alternativa = SwapAlternative(
+                    product_id=encode_source_ref(sustituto["source_product_id"]),
+                    name=sustituto["name"],
+                    brand=sustituto["brand"],
+                    image_url=sustituto["image_url"],
+                    unit_price=sustituto["price"],
+                    supermarket_code=sustituto["supermarket_code"],
+                    supermarket_name=sustituto["supermarket_name"],
+                )
+            reemplazos.append(
+                SingleStoreReplacement(
+                    item_id=item["id"], item_name=item["name"], quantity=item["quantity"], substitute=alternativa
+                )
+            )
+
+        if con_precio == 0:
+            continue  # una tienda que no tiene nada de la lista no es una opción realista
+        opciones.append(
+            SingleStoreOption(
+                supermarket_code=codigo,
+                supermarket_name=nombre,
+                items_total=len(items),
+                items_priced=con_precio,
+                current_total=round(total_actual, 2),
+                completable=completable,
+                total_if_replaced=round(total_con_reemplazos, 2) if completable else None,
+                replacements=reemplazos,
+            )
+        )
+
+    # Primero las que se pueden completar (con menos reemplazos y más baratas), luego
+    # las demás por cuántos productos ya tienen.
+    opciones.sort(
+        key=lambda o: (
+            not o.completable,
+            len(o.replacements) if o.completable else -o.items_priced,
+            o.total_if_replaced if o.completable else 0,
+        )
+    )
+    return SingleStoreResponse(list_id=list_id, options=opciones)

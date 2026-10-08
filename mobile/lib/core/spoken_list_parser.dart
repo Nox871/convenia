@@ -83,7 +83,11 @@ const _productHeads = {
 // ("leche DE coco", "arroz CON pollo", "aceite PARA freir").
 const _joiners = {'de', 'del', 'con', 'sin', 'para', 'en', 'a', 'al', 'x'};
 
+// Unidades de conteo: "30 und" es una presentación, no otro producto.
+const _countUnits = {'und', 'unds', 'ud', 'uds', 'unid', 'unidad', 'unidades'};
+
 const _unitWords = {
+  'und', 'unds', 'ud', 'uds', 'unid',
   'ml', 'lt', 'l', 'litro', 'litros', 'kg', 'kilo', 'kilos', 'gr', 'g', 'gramos', 'libra', 'libras',
   'docena', 'docenas', 'unidad', 'unidades', 'bolsa', 'bolsas', 'paquete', 'paquetes', 'caja', 'cajas',
   'botella', 'botellas',
@@ -118,10 +122,15 @@ List<List<String>> _splitRunOn(List<String> words) {
         !_unitWords.contains(next);
     // "arroz leche": un producto conocido tras otro ya completo. Si el grupo
     // actual es sólo una cantidad ("2 leche"), van juntos.
+    // "2 leche", "30 unidades huevo": mientras lo anterior sea sólo una cantidad
+    // (con su unidad), el producto que llega es el suyo, no uno nuevo.
+    final onlyQuantityPrefix = current.isNotEmpty &&
+        _isQuantityToken(current.first) &&
+        current.skip(1).every((w) => _unitWords.contains(_stripAccents(w)) || _fillerWords.contains(_stripAccents(w)));
     final startsProduct = _productHeads.contains(plain) &&
         current.isNotEmpty &&
         !afterJoiner &&
-        !(current.length == 1 && _isQuantityToken(current.first));
+        !onlyQuantityPrefix;
 
     if (startsQuantity || startsProduct) {
       groups.add(current);
@@ -186,6 +195,20 @@ List<SpokenListEntry> parseSpokenList(String text) {
 
     final digitMatch = RegExp(r'^\d+$').hasMatch(words.first);
     final wordNumber = _numberWords[_stripAccents(words.first)];
+
+    // "30 unidades huevo": con 10 o más es una PRESENTACIÓN (un cartón de 30),
+    // no 30 compras. Se conserva junto al nombre para que la búsqueda la entienda.
+    if (digitMatch &&
+        words.length >= 3 &&
+        int.parse(words.first) >= 10 &&
+        _countUnits.contains(_stripAccents(words[1]))) {
+      final rest = words.sublist(2).where((w) => !_fillerWords.contains(_stripAccents(w))).toList();
+      if (rest.isNotEmpty) {
+        entries.add(SpokenListEntry(quantity: 1, searchText: '${rest.join(' ')} ${words.first} und'));
+        continue;
+      }
+    }
+
     if (digitMatch) {
       quantity = int.parse(words.first);
       startIndex = 1;

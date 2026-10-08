@@ -6,6 +6,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from app.core.category_bucket import categoria_de_producto
+from app.core.query_parser import escapar_like, interpretar, patron_de_palabra, sin_tildes
 from app.core.scope import sql_scope_clause
 from app.core.product_ref import ProductRef, encode_source_ref
 
@@ -56,7 +57,7 @@ def search_source_products(
             LEFT JOIN LATERAL (
                 SELECT price, list_price, currency
                 FROM price_observations po
-                WHERE po.source_product_id = sp.id AND po.available = TRUE
+                WHERE po.source_product_id = sp.id AND po.available = TRUE AND po.price > 0 AND sp.status = 'ACTIVE'
                 ORDER BY po.observed_at DESC
                 LIMIT 1
             ) lp ON TRUE
@@ -118,7 +119,7 @@ def search_products_grouped(
     observación de precio más reciente primero).
     """
     canon_filters = ["pm.status = 'CONFIRMED'"]
-    suelto_filters = ["pm.id IS NULL", "sp.is_active = TRUE"]
+    suelto_filters = ["pm.id IS NULL", "sp.is_active = TRUE", "lp.price IS NOT NULL"]
     params: dict = {"offset": offset, "limit": limit, "sm_codes": supermarket_codes}
     sm_best, sm_cnt, sm_sp = (
         sql_scope_clause("sp", supermarket_codes),
@@ -126,13 +127,53 @@ def search_products_grouped(
         sql_scope_clause("sp", supermarket_codes),
     )
 
-    if q:
-        params["q_pattern"] = f"%{q}%"
-        canon_extra_q = "AND p.name ILIKE :q_pattern"
-        suelto_extra_q = "AND sp.name_raw ILIKE :q_pattern"
-    else:
-        canon_extra_q = ""
-        suelto_extra_q = ""
+    # La consulta se interpreta: las PALABRAS deben estar todas en el nombre (en
+    # cualquier orden) y la PRESENTACIÓN pedida ("30 und", "500", "1 litro") no
+    # se exige, sólo pone primero a los productos que la traen.
+    consulta = interpretar(q) if q else None
+    palabras = consulta.palabras[:6] if consulta else []
+    if q and consulta and not palabras and consulta.cantidad_regex is None:
+        palabras = [sin_tildes(q).strip()]  # texto sin forma reconocible: se busca tal cual
+
+    canon_extra_q = suelto_extra_q = ""
+    relevancia = "0"
+    relevancia_orden = ""
+    cantidad = "0"
+    cantidad_orden = ""
+
+    if palabras:
+        for i, palabra in enumerate(palabras):
+            patron = patron_de_palabra(palabra)
+            if patron is None:
+                # texto sin forma de palabra: se busca como subcadena, como antes
+                params[f"w{i}"] = f"%{escapar_like(palabra)}%"
+                canon_extra_q += f" AND unaccent(p.name) ILIKE unaccent(:w{i})"
+                suelto_extra_q += f" AND unaccent(sp.name_raw) ILIKE unaccent(:w{i})"
+            else:
+                # Por PALABRA y no por subcadena: "pan" no debe encontrar paño,
+                # empanada, Pantene ni España (ver `patron_de_palabra`).
+                params[f"w{i}"] = patron
+                canon_extra_q += f" AND lower(unaccent(p.name)) ~ :w{i}"
+                suelto_extra_q += f" AND lower(unaccent(sp.name_raw)) ~ :w{i}"
+        # Relevancia: 0 = el nombre empieza por la primera palabra ("Arroz Diana"),
+        # 1 = la trae como palabra ("Pan de arroz"), 2 = sólo como parte de otra.
+        # Sin esto, ordenar por precio subía panes y cereales que apenas la mencionan.
+        primera = escapar_like(palabras[0])
+        params["q_start"] = f"{primera}%"
+        params["q_word"] = f"% {primera} %"
+        relevancia = (
+            "CASE WHEN lower(unaccent(name)) LIKE unaccent(:q_start) THEN 0 "
+            "WHEN lower(' ' || unaccent(name) || ' ') LIKE unaccent(:q_word) THEN 1 ELSE 2 END"
+        )
+        relevancia_orden = "relevancia ASC, "
+
+    if consulta and consulta.cantidad_regex:
+        params["q_qty"] = consulta.cantidad_regex
+        cantidad = "CASE WHEN lower(unaccent(name)) ~ :q_qty THEN 0 ELSE 1 END"
+        cantidad_orden = "cantidad_ok ASC, "
+        if not palabras:  # sólo pidió una presentación: se muestran las que la traen
+            canon_extra_q += " AND lower(unaccent(p.name)) ~ :q_qty"
+            suelto_extra_q += " AND lower(unaccent(sp.name_raw)) ~ :q_qty"
 
     if supermarket_code:
         params["supermarket_code"] = supermarket_code
@@ -180,7 +221,7 @@ def search_products_grouped(
                 SELECT
                     p.id AS product_id, p.name, p.brand,
                     best.image_url, best.price, best.list_price, best.currency, best.observed_at,
-                    cnt.offers_count
+                    cnt.offers_count, ofe.ofertas
                 FROM products p
                 JOIN LATERAL (
                     SELECT sp.image_url, po.price, po.list_price, po.currency, po.observed_at
@@ -189,7 +230,7 @@ def search_products_grouped(
                     JOIN LATERAL (
                         SELECT price, list_price, currency, observed_at
                         FROM price_observations
-                        WHERE source_product_id = sp.id AND available = TRUE
+                        WHERE source_product_id = sp.id AND available = TRUE AND price > 0 AND sp.status = 'ACTIVE'
                         ORDER BY observed_at DESC
                         LIMIT 1
                     ) po ON TRUE
@@ -204,16 +245,41 @@ def search_products_grouped(
                     WHERE pm2.product_id = p.id AND pm2.status = 'CONFIRMED' {sm_cnt}
                       AND EXISTS (
                           SELECT 1 FROM price_observations po3
-                          WHERE po3.source_product_id = sp2.id AND po3.available = TRUE
+                          WHERE po3.source_product_id = sp2.id AND po3.available = TRUE AND po3.price > 0 AND sp2.status = 'ACTIVE'
                       )
                 ) cnt ON TRUE
+                JOIN LATERAL (
+                    SELECT json_agg(
+                               json_build_object('supermarket_code', x.code,
+                                                 'supermarket_name', x.sname,
+                                                 'price', x.price)
+                               ORDER BY x.price ASC
+                           ) AS ofertas
+                    FROM (
+                        SELECT DISTINCT ON (s2.id) s2.code, s2.name AS sname, po2.price
+                        FROM product_matches pm2
+                        JOIN source_products sp2 ON sp2.id = pm2.source_product_id
+                        JOIN supermarkets s2 ON s2.id = sp2.supermarket_id
+                        JOIN LATERAL (
+                            SELECT price FROM price_observations
+                            WHERE source_product_id = sp2.id AND available = TRUE AND price > 0 AND sp2.status = 'ACTIVE'
+                            ORDER BY observed_at DESC LIMIT 1
+                        ) po2 ON TRUE
+                        WHERE pm2.product_id = p.id AND pm2.status = 'CONFIRMED' {sm_cnt}
+                        ORDER BY s2.id, po2.price ASC
+                    ) x
+                ) ofe ON TRUE
                 WHERE TRUE {canon_extra_q} {canon_supermarket_exists} {canon_category_exists}
             ),
             sueltos AS (
                 SELECT
                     sp.id AS source_product_id, sp.name_raw AS name, sp.brand_raw AS brand,
                     sp.image_url, lp.price, lp.list_price, lp.currency, lp.observed_at,
-                    1 AS offers_count, s.code AS supermarket_code, s.name AS supermarket_name
+                    1 AS offers_count, s.code AS supermarket_code, s.name AS supermarket_name,
+                    CASE WHEN lp.price IS NULL THEN NULL ELSE json_build_array(
+                        json_build_object('supermarket_code', s.code,
+                                          'supermarket_name', s.name,
+                                          'price', lp.price)) END AS ofertas
                 FROM source_products sp
                 JOIN supermarkets s ON s.id = sp.supermarket_id
                 LEFT JOIN product_matches pm ON pm.source_product_id = sp.id AND pm.status = 'CONFIRMED'
@@ -221,7 +287,7 @@ def search_products_grouped(
                 LEFT JOIN LATERAL (
                     SELECT price, list_price, currency, observed_at
                     FROM price_observations
-                    WHERE source_product_id = sp.id AND available = TRUE
+                    WHERE source_product_id = sp.id AND available = TRUE AND price > 0 AND sp.status = 'ACTIVE'
                     ORDER BY observed_at DESC
                     LIMIT 1
                 ) lp ON TRUE
@@ -230,17 +296,20 @@ def search_products_grouped(
             combinado AS (
                 SELECT 'p-' || product_id::text AS id, name, brand, image_url,
                        price, list_price, currency, observed_at, offers_count,
-                       NULL::text AS supermarket_code, NULL::text AS supermarket_name
+                       NULL::text AS supermarket_code, NULL::text AS supermarket_name, ofertas
                 FROM canonicos
                 UNION ALL
                 SELECT 'sp-' || source_product_id::text, name, brand, image_url,
                        price, list_price, currency, observed_at, offers_count,
-                       supermarket_code, supermarket_name
+                       supermarket_code, supermarket_name, ofertas
                 FROM sueltos
             )
             SELECT *, COUNT(*) OVER() AS full_count
-            FROM combinado
-            ORDER BY {order_by}, name ASC
+            FROM (
+                SELECT combinado.*, {relevancia} AS relevancia, {cantidad} AS cantidad_ok
+                FROM combinado
+            ) r
+            ORDER BY {cantidad_orden}{relevancia_orden}{order_by}, name ASC
             OFFSET :offset LIMIT :limit
             """
         ),
@@ -262,6 +331,14 @@ def search_products_grouped(
             "currency": row["currency"],
             "offers_count": row["offers_count"],
             "is_matched": row["id"].startswith("p-"),
+            "offers": [
+                {
+                    "supermarket_code": o["supermarket_code"],
+                    "supermarket_name": o["supermarket_name"],
+                    "price": float(o["price"]),
+                }
+                for o in (row["ofertas"] or [])
+            ],
         }
         for row in rows
     ]
@@ -340,7 +417,7 @@ def get_canonical_product_detail(conn: Connection, product_id: int) -> dict | No
             JOIN source_products sp ON sp.id = pm.source_product_id
             LEFT JOIN LATERAL (
                 SELECT price FROM price_observations
-                WHERE source_product_id = sp.id AND available = TRUE
+                WHERE source_product_id = sp.id AND available = TRUE AND price > 0 AND sp.status = 'ACTIVE'
                 ORDER BY observed_at DESC LIMIT 1
             ) po ON TRUE
             WHERE pm.product_id = :id AND pm.status = 'CONFIRMED'
@@ -407,6 +484,7 @@ def search_products_fuzzy(
     limit: int,
     prefer: str = "comparable",
     supermarket_codes: list[str] | None = None,
+    cantidad_regex: str | None = None,
 ) -> list[dict]:
     """Productos cuyo nombre se PARECE a `q`, para cuando el texto no es
     exacto (entrada por voz, texto extraído por OCR, o errores de tipeo) o
@@ -433,10 +511,12 @@ def search_products_fuzzy(
     agrega uno automáticamente: el usuario confirma en la pantalla de
     revisión.
     """
+    # La presentación pedida ("huevos 30 und") pasa por delante de todo lo demás.
+    cantidad_orden = "cantidad_ok ASC, " if cantidad_regex else ""
     if prefer == "price":
-        order_by = "tier ASC, ROUND(score::numeric, 1) DESC, price ASC, offers_count DESC, name ASC"
+        order_by = cantidad_orden + "tier ASC, ROUND(score::numeric, 1) DESC, price ASC, offers_count DESC, name ASC"
     else:
-        order_by = "tier ASC, ROUND(score::numeric, 1) DESC, offers_count DESC, price ASC, name ASC"
+        order_by = cantidad_orden + "tier ASC, ROUND(score::numeric, 1) DESC, offers_count DESC, price ASC, name ASC"
 
     sm_best, sm_cnt, sm_sp = (
         sql_scope_clause("sp", supermarket_codes),
@@ -461,7 +541,7 @@ def search_products_fuzzy(
                     JOIN source_products sp ON sp.id = pm.source_product_id
                     JOIN LATERAL (
                         SELECT price FROM price_observations
-                        WHERE source_product_id = sp.id AND available = TRUE
+                        WHERE source_product_id = sp.id AND available = TRUE AND price > 0 AND sp.status = 'ACTIVE'
                         ORDER BY observed_at DESC LIMIT 1
                     ) po ON TRUE
                     WHERE pm.product_id = p.id AND pm.status = 'CONFIRMED' {sm_best}
@@ -475,7 +555,7 @@ def search_products_fuzzy(
                     WHERE pm2.product_id = p.id AND pm2.status = 'CONFIRMED' {sm_cnt}
                       AND EXISTS (
                           SELECT 1 FROM price_observations po3
-                          WHERE po3.source_product_id = sp2.id AND po3.available = TRUE
+                          WHERE po3.source_product_id = sp2.id AND po3.available = TRUE AND po3.price > 0 AND sp2.status = 'ACTIVE'
                       )
                 ) cnt ON TRUE
 
@@ -486,7 +566,7 @@ def search_products_fuzzy(
                 FROM source_products sp
                 JOIN LATERAL (
                     SELECT price FROM price_observations
-                    WHERE source_product_id = sp.id AND available = TRUE
+                    WHERE source_product_id = sp.id AND available = TRUE AND price > 0 AND sp.status = 'ACTIVE'
                     ORDER BY observed_at DESC LIMIT 1
                 ) lp ON TRUE
                 WHERE sp.is_active = TRUE {sm_sp}
@@ -531,7 +611,9 @@ def search_products_fuzzy(
             SELECT c.id, c.name, c.brand, c.image_url,
                    c.price::float AS price, c.offers_count::int AS offers_count,
                    pu.score,
-                   CASE WHEN pp.first_sim >= 0.8 THEN 0 ELSE 1 END AS tier
+                   CASE WHEN pp.first_sim >= 0.8 THEN 0 ELSE 1 END AS tier,
+                   CASE WHEN CAST(:qty AS text) IS NOT NULL AND lower(unaccent(c.name)) ~ CAST(:qty AS text)
+                        THEN 0 ELSE 1 END AS cantidad_ok
             FROM puntaje pu
             JOIN candidatos c ON c.id = pu.id
             LEFT JOIN primera_palabra pp ON pp.id = pu.id
@@ -539,6 +621,29 @@ def search_products_fuzzy(
             LIMIT :limit
             """
         ),
-        {"q": q, "limit": limit, "sm_codes": supermarket_codes},
+        {"q": q, "limit": limit, "sm_codes": supermarket_codes, "qty": cantidad_regex},
     ).mappings().all()
     return [dict(row) for row in rows]
+
+
+def get_name_vocabulary(
+    conn: Connection, supermarket_codes: list[str] | None = None
+) -> dict[str, int]:
+    """Palabras de los nombres de productos activos y en cuántos productos aparece cada una."""
+    scope = sql_scope_clause("sp", supermarket_codes)
+    rows = conn.execute(
+        text(
+            f"""
+            SELECT w AS word, COUNT(*) AS veces
+            FROM (
+                SELECT unnest(regexp_split_to_array(lower(unaccent(sp.name_raw)), '[^a-z0-9]+')) AS w
+                FROM source_products sp
+                WHERE sp.status = 'ACTIVE' {scope}
+            ) t
+            WHERE length(w) >= 3
+            GROUP BY w
+            """
+        ),
+        {"sm_codes": supermarket_codes},
+    ).all()
+    return {row[0]: int(row[1]) for row in rows}

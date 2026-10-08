@@ -38,7 +38,7 @@ SOURCE = "D1"
 DOMINIO_BASE = "https://www.d1.com.co"
 
 MAX_CATEGORIAS = 10
-MAX_PAGINAS_POR_CATEGORIA = 4
+MAX_PAGINAS_POR_CATEGORIA = 200  # techo de seguridad; el corte real es la primera página sin productos
 
 DELAY_ENTRE_PAGINAS = 0.50
 DELAY_ENTRE_PRODUCTOS = 0.20

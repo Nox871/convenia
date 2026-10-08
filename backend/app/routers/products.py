@@ -3,7 +3,14 @@ from sqlalchemy.engine import Connection
 
 from app.core.database import get_db
 from app.core.scope import parse_supermarket_scope
-from app.schemas.product import ProductDetail, ProductListResponse, ProductSuggestResponse
+from app.schemas.product import (
+    BasketResponse,
+    DidYouMeanResponse,
+    PopularSearchesResponse,
+    ProductDetail,
+    ProductListResponse,
+    ProductSuggestResponse,
+)
 from app.services import product_service
 
 router = APIRouter(prefix="/api/v1/products", tags=["products"])
@@ -52,6 +59,36 @@ def suggest_products(
     return product_service.suggest_products(
         conn, q=q, limit=limit, prefer=prefer, supermarket_codes=scope
     )
+
+
+@router.get("/basket", response_model=BasketResponse)
+def build_basket(
+    terms: str = Query(..., description="Productos separados por '|', en orden de prioridad. Ej. 'pan|huevos|leche'"),
+    tier: str = Query("medio", description="Nivel de gasto: 'economico', 'medio' o 'alto'"),
+    budget: float | None = Query(None, gt=0, description="Presupuesto máximo en pesos (opcional)"),
+    scope: list[str] | None = Depends(parse_supermarket_scope),
+    conn: Connection = Depends(get_db),
+):
+    return product_service.build_basket(
+        conn, terms=terms.split("|"), tier=tier, budget=budget, supermarket_codes=scope
+    )
+
+
+@router.get("/popular-searches", response_model=PopularSearchesResponse)
+def popular_searches(
+    limit: int = Query(6, ge=1, le=20, description="Cuántas búsquedas devolver"),
+    conn: Connection = Depends(get_db),
+):
+    return product_service.popular_searches(conn, limit=limit)
+
+
+@router.get("/did-you-mean", response_model=DidYouMeanResponse)
+def did_you_mean(
+    q: str = Query(..., description="Texto buscado, posiblemente con errores de ortografía"),
+    scope: list[str] | None = Depends(parse_supermarket_scope),
+    conn: Connection = Depends(get_db),
+):
+    return product_service.did_you_mean(conn, q=q, supermarket_codes=scope)
 
 
 @router.get("/{product_id}", response_model=ProductDetail)
