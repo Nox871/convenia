@@ -3,6 +3,7 @@ from sqlalchemy.engine import Connection
 
 from app.core.database import get_db
 from app.core.scope import parse_supermarket_scope
+from app.schemas.price import CompareResponse
 from app.schemas.product import (
     BasketResponse,
     DidYouMeanResponse,
@@ -89,6 +90,16 @@ def did_you_mean(
     conn: Connection = Depends(get_db),
 ):
     return product_service.did_you_mean(conn, q=q, supermarket_codes=scope)
+
+
+@router.get("/by-ean/{ean}", response_model=CompareResponse)
+def compare_by_ean(
+    ean: str,
+    scope: list[str] | None = Depends(parse_supermarket_scope),
+    conn: Connection = Depends(get_db),
+):
+    """Compara precios de un producto a partir de su código de barras (EAN/UPC/GTIN)."""
+    return product_service.compare_by_ean(conn, ean, supermarket_codes=scope)
 
 
 @router.get("/{product_id}", response_model=ProductDetail)

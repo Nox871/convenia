@@ -647,3 +647,40 @@ def get_name_vocabulary(
         {"sm_codes": supermarket_codes},
     ).all()
     return {row[0]: int(row[1]) for row in rows}
+
+
+def find_ref_by_ean(conn: Connection, ean14: str) -> ProductRef | None:
+    """Referencia del producto que tiene este EAN (clave de 14 dígitos).
+
+    Si algún source_product con ese EAN está homologado (match CONFIRMED) se
+    devuelve el producto canónico ('p-<id>'), que agrupa todas las tiendas.
+    Si no, el source_product activo más reciente con ese EAN ('sp-<id>')."""
+    row = conn.execute(
+        text(
+            """
+            SELECT pm.product_id
+            FROM source_products sp
+            JOIN product_matches pm ON pm.source_product_id = sp.id AND pm.status = 'CONFIRMED'
+            WHERE sp.ean = :ean
+            ORDER BY sp.is_active DESC, sp.last_seen_at DESC NULLS LAST
+            LIMIT 1
+            """
+        ),
+        {"ean": ean14},
+    ).first()
+    if row is not None:
+        return ProductRef(kind="canonical", numeric_id=row[0])
+
+    row = conn.execute(
+        text(
+            """
+            SELECT sp.id
+            FROM source_products sp
+            WHERE sp.ean = :ean
+            ORDER BY sp.is_active DESC, sp.last_seen_at DESC NULLS LAST
+            LIMIT 1
+            """
+        ),
+        {"ean": ean14},
+    ).first()
+    return ProductRef(kind="source", numeric_id=row[0]) if row is not None else None

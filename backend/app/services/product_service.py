@@ -20,6 +20,7 @@ from app.core.category_bucket import ETIQUETAS_AMIGABLES
 from app.core.config import settings
 from app.core.exceptions import InvalidParameterError, NotFoundError
 from app.core.product_ref import parse_product_ref
+from shared.ean import normalizar_ean
 from app.core import basket as basket_core
 from app.core.query_parser import interpretar, sin_tildes, termino_de_busqueda
 from app.core.spelling import sugerir_busqueda
@@ -184,6 +185,23 @@ def get_product_detail(conn: Connection, product_id_raw: str) -> ProductDetail:
         raise NotFoundError(f"Producto '{product_id_raw}' no existe")
 
     return ProductDetail(**data)
+
+
+def compare_by_ean(
+    conn: Connection, ean_raw: str, supermarket_codes: list[str] | None = None
+) -> CompareResponse:
+    """Comparación de precios a partir del código de barras (lo que lee la cámara).
+
+    Acepta EAN-8, UPC-12, EAN-13 o GTIN-14. Responde igual que /compare, para
+    que el cliente (p. ej. el módulo de realidad aumentada) no necesite un
+    segundo formato."""
+    ean14 = normalizar_ean(ean_raw)
+    if ean14 is None:
+        raise InvalidParameterError(f"'{ean_raw}' no es un código de barras válido")
+    ref = product_repository.find_ref_by_ean(conn, ean14)
+    if ref is None:
+        raise NotFoundError(f"No hay un producto con el código de barras '{ean_raw}'")
+    return compare_product(conn, ref.encode(), supermarket_codes)
 
 
 def get_product_prices(
