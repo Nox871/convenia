@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Convenia AR · prototipo conceptual</title>
+<style>
+  :root{--ink:#17171C;--muted:#5B5B63;--faint:#9A9AA2;--line:#F1F0F5;--card:#FFFFFF;--bg:#F7F5EF;--brand:#5B4FE9;--lav:#ECEAFF;--ok:#16805C;--okbg:#E3F3EC;--okline:#B9E0CD;--warn:#B7791F;--warnbg:#FBF0DD}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:Inter,Manrope,"Segoe UI",system-ui,Arial,sans-serif;background:var(--bg);color:var(--ink);display:flex;flex-direction:column;align-items:center;min-height:100vh;padding:18px 12px}
+  h1{font-size:15px;margin:0 0 2px;font-weight:600}
+  .sub{font-size:12px;color:var(--muted);margin:0 0 12px;text-align:center}
+  .phone{width:390px;height:790px;background:#101521;border-radius:38px;padding:10px;box-shadow:0 12px 40px rgba(20,30,50,.25);position:relative}
+  .screen{width:100%;height:100%;border-radius:30px;overflow:hidden;background:#000;position:relative;display:flex;flex-direction:column}
+  .status{height:26px;background:rgba(0,0,0,.55);color:#fff;font-size:11px;display:flex;justify-content:space-between;align-items:center;padding:0 16px;z-index:5}
+  .cam{position:relative;flex:1;min-height:0;background:linear-gradient(#cfd6e2,#aeb8c9)}
+  .cam svg.scene{position:absolute;inset:0;width:100%;height:100%}
+  .hit{cursor:pointer}
+  .reticle{position:absolute;border:0;pointer-events:none;transition:all .35s ease;z-index:3}
+  .reticle i{position:absolute;width:18px;height:18px;border:3px solid #fff;filter:drop-shadow(0 0 2px rgba(0,0,0,.6))}
+  .reticle i:nth-child(1){left:0;top:0;border-right:0;border-bottom:0;border-radius:6px 0 0 0}
+  .reticle i:nth-child(2){right:0;top:0;border-left:0;border-bottom:0;border-radius:0 6px 0 0}
+  .reticle i:nth-child(3){left:0;bottom:0;border-right:0;border-top:0;border-radius:0 0 0 6px}
+  .reticle i:nth-child(4){right:0;bottom:0;border-left:0;border-top:0;border-radius:0 0 6px 0}
+  .reticle.scan i{border-color:#7FE0B0}
+  .hint{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);background:rgba(20,28,45,.82);color:#fff;font-size:12px;padding:7px 12px;border-radius:16px;white-space:nowrap;z-index:4}
+  .net{position:absolute;right:10px;top:10px;z-index:6;font-size:11px;background:rgba(255,255,255,.92);border:1px solid var(--line);border-radius:14px;padding:4px 9px;cursor:pointer;user-select:none}
+  .net.off{background:var(--warnbg);border-color:#EBD3A3;color:var(--warn)}
+  .src{position:absolute;left:10px;bottom:46px;z-index:6;font-size:10px;border-radius:12px;padding:3px 8px;background:rgba(255,255,255,.92);border:1px solid var(--line);color:var(--muted)}
+  .src.api{color:var(--ok);border-color:var(--okline);background:var(--okbg)}
+  .offbar{position:absolute;left:10px;top:10px;z-index:6;font-size:11px;background:var(--warnbg);border:1px solid #EBD3A3;color:var(--warn);border-radius:14px;padding:4px 9px;display:none}
+  .tag{position:absolute;z-index:4;width:236px;background:var(--card);border-radius:16px;box-shadow:0 6px 22px rgba(10,20,40,.35);padding:10px 12px;display:none;transform:translate(-50%,-100%)}
+  .tag:after{content:"";position:absolute;left:50%;bottom:-8px;width:14px;height:14px;background:var(--card);transform:translateX(-50%) rotate(45deg)}
+  .tag.below{transform:translate(-50%,0)}
+  .tag.below:after{bottom:auto;top:-7px}
+  .tag h3{margin:0 0 1px;font-size:12.5px;line-height:1.25}
+  .tag .here{font-size:11.5px;color:var(--muted);margin-bottom:6px}
+  .best{display:flex;align-items:center;gap:6px;font-size:12px;margin-bottom:6px}
+  .best b{font-size:15px}
+  .chip{font-size:10.5px;border-radius:9999px;padding:2px 8px;background:var(--okbg);border:1px solid var(--okline);color:var(--ok);font-weight:600}
+  .chip.neutral{background:var(--line);border-color:var(--line);color:var(--muted)}
+  .row{display:grid;grid-template-columns:78px 1fr 58px;align-items:center;gap:6px;font-size:11px;margin:2px 0}
+  .bar{height:7px;border-radius:4px;background:var(--line);overflow:hidden}
+  .bar>span{display:block;height:100%;background:#BDB8F5}
+  .bar>span.min{background:var(--ok)}
+  .acts{display:flex;gap:6px;margin-top:8px}
+  button.btn{flex:1;border:1px solid var(--brand);background:var(--brand);color:#fff;border-radius:12px;font-size:11.5px;padding:8px 4px;font-weight:600;cursor:pointer;font-family:inherit}
+  button.btn.sec{background:#fff;color:var(--brand)}
+  button.btn[disabled]{opacity:.55;cursor:default}
+  .panel{background:var(--card);padding:10px 14px 12px;z-index:5;border-top:1px solid var(--line)}
+  .panel .t{display:flex;justify-content:space-between;align-items:baseline;font-size:12px}
+  .panel .t b{font-size:13.5px}
+  .items{font-size:11px;color:var(--muted);margin:3px 0 7px;min-height:15px}
+  .tot{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .tot div{background:var(--bg);border-radius:12px;padding:7px 9px;font-size:11px;color:var(--muted)}
+  .tot div strong{display:block;font-size:14px;color:var(--ink)}
+  .tot div.save{background:var(--okbg);border:1px solid var(--okline)}.tot div.save strong{color:var(--ok)}
+  .note{font-size:11px;color:var(--muted);margin-top:10px;max-width:420px;text-align:center}
+  body.plano{background:#fff;padding:0}
+  body.plano h1,body.plano .sub,body.plano .note{display:none}
+</style>
+</head>
+<body>
+<h1>Convenia AR · comparador en góndola</h1>
+<p class="sub">Prototipo conceptual interactivo · toca un producto para “escanearlo”</p>
+
+<div class="phone"><div class="screen">
+  <div class="status"><span>9:41</span><span>Éxito Cañaveral · a 0 m</span><span>4G ▪▪▪</span></div>
+  <div class="cam" id="cam">
+    <div class="net" id="net">● En línea</div>
+    <div class="src copia" id="src">○ Copia incluida</div>
+    <div class="offbar" id="offbar">Datos guardados en el teléfono</div>
+
+    <svg class="scene" viewBox="0 0 360 520" preserveAspectRatio="xMidYMid slice" id="scene" aria-label="Góndola de supermercado"></svg>
+    <div class="reticle" id="ret" style="left:130px;top:150px;width:100px;height:100px"><i></i><i></i><i></i><i></i></div>
+    <div class="tag" id="tag"></div>
+    <div class="hint" id="hint">Apunta al código de barras o toca un producto</div>
+  </div>
+  <div class="panel">
+    <div class="t"><b id="lc">Mi lista (0)</b><span style="color:var(--muted)">Estás en Éxito</span></div>
+    <div class="items" id="li">Aún no agregas productos</div>
+    <div class="tot">
+      <div>Todo en esta tienda<strong id="t1">$0</strong></div>
+      <div class="save">Repartido entre tiendas<strong id="t2">$0</strong></div>
+    </div>
+  </div>
+</div></div>
+<p class="note">Productos y precios de la base de datos de Convenia (última captura disponible, 3 de noviembre de 2026; pueden haber cambiado). Si el backend local está encendido, el prototipo consulta la API por código de barras; si no, usa la copia incluida. La escena de la góndola es un dibujo y la realidad aumentada es un prototipo conceptual. El producto se identifica por su código de barras (EAN) y se consulta a la API de Convenia; sin señal se usa la copia guardada en el teléfono.</p>
+
+<script>
+const STORES=["Éxito","Jumbo","Carulla","Olímpica"];
+// Datos reales de la base de Convenia (último precio disponible por tienda, captura del 3-nov-2026).
+// null = el producto no figura en esa tienda. p = [Éxito, Jumbo, Carulla, Olímpica]
+const P=[
+ {id:1,n:"Galletas Oreo White Fudge 262,4 g",ean:"7622300722470",img:"img/oreo.jpg",x:34,y:122,w:88,h:88,p:[19050,20790,19100,18990]},
+ {id:2,n:"Galletas Noel Navidad 400 g",ean:"7702025151585",img:"img/noel.jpg",x:136,y:122,w:88,h:88,p:[11450,12090,11500,10990]},
+ {id:3,n:"Café Juan Valdez Huila Navidad 220 g",ean:"7701362001614",img:"img/cafe.jpg",x:238,y:122,w:88,h:88,p:[40250,35990,37300,null]},
+ {id:4,n:"Ponqué Chocoramo x5 (325 g)",ean:"7702914596794",img:"img/choco.webp",x:60,y:312,w:92,h:88,p:[10427,14890,10323,null]},
+ {id:5,n:"Mezcla para buñuelos Maizena 300 g",ean:"7702047037645",img:"img/bunuelo.jpg",x:198,y:312,w:92,h:88,p:[8175,11100,9225,10500]}
+];
+const API=(new URLSearchParams(location.search).get("api"))||"http://127.0.0.1:8000";
+const CODES=["EXITO","JUMBO","CARULLA","OLIMPICA"];
+const precios=p=>(offline||!p.live)?p.p:p.live;       // sin señal -> copia guardada
+const vals=p=>precios(p).filter(v=>v!==null);
+let origen="copia";
+async function cargarAPI(){
+  try{
+    const rs=await Promise.all(P.map(p=>fetch(`${API}/api/v1/products/by-ean/${p.ean}`,{signal:AbortSignal.timeout(3000)}).then(r=>{if(!r.ok)throw new Error(r.status);return r.json()})));
+    rs.forEach((j,i)=>{P[i].live=CODES.map(c=>{const o=j.offers.find(o=>o.supermarket_code===c);return o&&o.price!=null?Math.round(o.price):null});
+      const f=j.offers.map(o=>o.observed_at).filter(Boolean).sort().pop();if(f)P[i].fecha=f.slice(0,10);});
+    origen="api";
+  }catch(e){origen="copia";}
+  const b=$("#src");if(b){b.textContent=origen==="api"?"● API de Convenia en vivo":"○ Copia incluida";b.className="src "+origen;}
+}
+const $=s=>document.querySelector(s);
+const fmt=n=>"$"+n.toLocaleString("es-CO");
+let sel=null,lista=new Set(),offline=false,H=location.hash.slice(1);
+
+// ---- escena SVG
+const sc=$("#scene");
+let svg=`<defs><linearGradient id="w" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#dfe4ee"/><stop offset="1" stop-color="#bcc6d6"/></linearGradient></defs>
+<rect width="360" height="520" fill="url(#w)"/>
+<rect x="0" y="210" width="360" height="14" fill="#8D97A8"/><rect x="0" y="224" width="360" height="8" fill="#707A8C" opacity=".55"/>
+<rect x="0" y="400" width="360" height="14" fill="#8D97A8"/><rect x="0" y="414" width="360" height="8" fill="#707A8C" opacity=".55"/>
+<rect x="0" y="40" width="360" height="22" fill="#e9edf4"/><text x="70" y="55" font-size="11" fill="#6b7385">PASILLO 4 · DESPENSA</text>`;
+// productos de relleno (no reconocibles)
+
+P.forEach(p=>{
+  svg+=`<g class="hit" data-id="${p.id}"><rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="6" fill="#fff"/>
+  <image href="${p.img}" x="${p.x+2}" y="${p.y+2}" width="${p.w-4}" height="${p.h-4}" preserveAspectRatio="xMidYMid meet"/></g>`;
+});
+sc.innerHTML=svg;
+
+// ---- coordenadas SVG → píxeles del contenedor (preserveAspectRatio slice)
+function toPx(x,y){
+  const r=$("#cam").getBoundingClientRect(),s=Math.max(r.width/360,r.height/520);
+  return {x:(r.width-360*s)/2+x*s,y:(r.height-520*s)/2+y*s,s};
+}
+function place(p){
+  const a=toPx(p.x,p.y),b=toPx(p.x+p.w,p.y+p.h),ret=$("#ret");
+  ret.style.left=(a.x-6)+"px";ret.style.top=(a.y-6)+"px";ret.style.width=(b.x-a.x+12)+"px";ret.style.height=(b.y-a.y+12)+"px";
+  const t=$("#tag"),W=$("#cam").clientWidth;let cx=(a.x+b.x)/2;cx=Math.min(Math.max(cx,126),W-126);
+  t.style.left=cx+"px";
+  const alto=t.offsetHeight||200;
+  if(a.y-alto-16<44){t.classList.add("below");t.style.top=(b.y+14)+"px";}
+  else{t.classList.remove("below");t.style.top=(a.y-12)+"px";}
+}
+function tagHTML(p){
+  const v=vals(p),pp=precios(p),here=pp[0],min=Math.min(...v),max=Math.max(...v),im=pp.indexOf(min);
+  const dif=here-min,pct=Math.round(dif*100/here);
+  const rows=STORES.map((s,i)=>pp[i]===null?"":`<div class="row"><span>${s}${i===0?" (aquí)":""}</span><div class="bar"><span class="${pp[i]===min?"min":""}" style="width:${Math.round(pp[i]*100/max)}%"></span></div><b style="text-align:right">${fmt(pp[i])}</b></div>`).join("");
+  const mejor=dif>0?`<span class="chip">Ahorras ${fmt(dif)} (${pct<1?"menos de 1":pct} %)</span>`:`<span class="chip neutral">Aquí es el más barato</span>`;
+  const en=lista.has(p.id);
+  return `<h3>${p.n}</h3><div class="here">En esta tienda: <b>${fmt(here)}</b> · ${(p.fecha||"2026-11-03").split("-").reverse().join("/")}</div>
+   <div class="best">Más barato: <b>${fmt(min)}</b> en ${STORES[im]}</div>${mejor}
+   <div style="margin-top:7px">${rows}</div>
+   <div class="acts"><button class="btn" id="add" ${en?"disabled":""}>${en?"✓ En la lista":"Agregar a la lista"}</button><button class="btn sec" id="cls">Cerrar</button></div>`;
+}
+function scan(id,instant){
+  const p=P.find(x=>x.id===id);sel=p;place(p);const ret=$("#ret"),t=$("#tag"),h=$("#hint");
+  t.style.display="none";ret.classList.add("scan");
+  h.textContent=`Leyendo código de barras · EAN ${p.ean}…`;
+  const done=()=>{ret.classList.remove("scan");t.innerHTML=tagHTML(p);t.style.display="block";place(p);
+    h.textContent=offline?"Sin señal: usando la copia guardada":`Comparado con ${vals(p).length} tiendas`+(origen==="api"?" · API en vivo":"");
+    $("#add").onclick=()=>{lista.add(id);render();t.innerHTML=tagHTML(p);$("#add").onclick=null;};
+    $("#cls").onclick=()=>{t.style.display="none";h.textContent="Apunta al código de barras o toca un producto";};
+    render();};
+  instant?done():setTimeout(done,650);
+}
+function render(){
+  const it=[...lista].map(i=>P.find(p=>p.id===i));
+  $("#lc").textContent=`Mi lista (${it.length})`;
+  $("#li").textContent=it.length?it.map(p=>p.n.split(" ").slice(0,2).join(" ")).join(" · "):"Aún no agregas productos";
+  const a=it.reduce((s,p)=>s+precios(p)[0],0),b=it.reduce((s,p)=>s+Math.min(...vals(p)),0);
+  $("#t1").textContent=fmt(a);$("#t2").textContent=fmt(b)+(a>b?`  (−${fmt(a-b)})`:"");
+}
+document.querySelectorAll(".hit").forEach(g=>g.addEventListener("click",()=>scan(+g.dataset.id)));
+$("#net").onclick=()=>setNet(!offline);
+function setNet(off){offline=off;$("#net").className="net"+(off?" off":"");$("#net").textContent=off?"○ Sin señal":"● En línea";$("#offbar").style.display=off?"block":"none";render();if(sel&&$("#tag").style.display==="block")scan(sel.id,true);}
+// estados por hash para las capturas: #plano&scan=1&lista=1,2&off
+if(/plano/.test(H))document.body.classList.add("plano");
+if(/(^|&)off/.test(H))setNet(true);
+const L=/lista=([\d,]+)/.exec(H);if(L)L[1].split(",").forEach(i=>lista.add(+i));
+render();
+const S=/scan=(\d)/.exec(H);
+window.addEventListener("load",()=>{cargarAPI().finally(()=>{render();if(S)scan(+S[1],true);});});
+window.addEventListener("resize",()=>{if(sel)place(sel)});
+</script>
+</body>
+</html>

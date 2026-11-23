@@ -1,0 +1,107 @@
+CONVENIA - COMO EJECUTARLO TODO SIN CLAUDE
+===========================================
+Nada de lo entregado depende de Claude. Son archivos normales y herramientas gratuitas.
+Todos los comandos son para PowerShell de Windows.
+
+0) QUE NECESITA TENER INSTALADO (una sola vez)
+   - Docker Desktop            (base de datos)
+   - Python 3                  (API). Si ya existe E:\convenia\backend\.venv, no hace falta nada mas.
+   - Flutter 3.47 + Android Studio con el emulador "Pixel_8"   (app movil)
+   - Navegador (Chrome o Edge) (prototipo web)
+   - Word y PowerPoint         (solo para abrir el informe y la presentacion)
+
+1) LO QUE DEBE GUARDAR AHORA (copia de seguridad, antes de perder acceso)
+   Estas cosas solo existen en este computador y/o en discos locales. Copielas a un USB o a la nube:
+   a) La carpeta del proyecto:           E:\convenia                (codigo, informe, scripts)
+   b) Esta carpeta de entrega:           E:\convenia\docs\hdpt-final\Proyecto_Final
+   c) El respaldo de la base de datos:   D:\UPB\4. ProyectoIntegradorIII\FINAL\convenia_final.dump  (30 MB)
+   d) El repositorio en GitHub:          https://github.com/Nox871/convenia
+      OJO: lo ultimo que se hizo (modulo AR en la app, pruebas) puede estar SIN subir a GitHub.
+      Para subirlo:  cd E:\convenia ;  git add <archivos> ;  git commit -m "mensaje" ;  git push origin main
+
+2) LEVANTAR TODO CON UN SOLO COMANDO
+      powershell -ExecutionPolicy Bypass -File E:\convenia\docs\hdpt-final\prototipo\iniciar_demo.ps1
+   Hace: abre Docker -> enciende la base de datos -> API en http://127.0.0.1:8000 -> prototipo en
+   http://127.0.0.1:8765/Convenia_AR_prototipo.html
+   Revise la API en http://127.0.0.1:8000/docs
+
+3) SI EL CONTENEDOR DE LA BASE DE DATOS YA NO EXISTE (por ejemplo, tras reinstalar Docker)
+   Recrearlo desde el respaldo (probado: queda con 51.373 productos y 1.036.673 precios):
+      docker run -d --name convenia-db -e POSTGRES_PASSWORD=convenia -p 5433:5432 postgres:16
+      docker exec convenia-db psql -U postgres -c "CREATE DATABASE convenia"
+      docker cp "D:\UPB\4. ProyectoIntegradorIII\FINAL\convenia_final.dump" convenia-db:/tmp/c.dump
+      docker exec convenia-db pg_restore -U postgres -d convenia --no-owner /tmp/c.dump
+   Luego vuelva al paso 2.
+
+4) SI LA API NO ARRANCA (falta el entorno de Python)
+      cd E:\convenia\backend
+      python -m venv .venv
+      .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+   Para encender la API a mano (el .env usa el puerto 5432; el contenedor usa el 5433):
+      $env:DB_PORT="5433"; $env:DB_PASSWORD="convenia"
+      .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+5) LA APP EN EL EMULADOR (lo recomendado para la sustentacion)
+   a) Abra el emulador Pixel_8 desde Android Studio (Device Manager) o:
+        & "$env:LOCALAPPDATA\Android\Sdk\emulator\emulator.exe" -avd Pixel_8
+      Enciendalo 10 a 15 minutos antes; si sale "no responde", elija "Esperar".
+   b) Instale el APK ya compilado:
+        & "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install -r "E:\convenia\docs\hdpt-final\Proyecto_Final\Prototipo\Convenia_app-debug.apk"
+        & "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" shell pm grant com.convenia.convenia_mobile android.permission.CAMERA
+   c) Abra la app "convenia_mobile". Apunta sola a la API del computador (10.0.2.2:8000).
+   d) Asistente: boton "Preguntar a ConveniaBot" (necesita n8n encendido, ver punto 7).
+   e) Modulo Convenia AR: boton "Comparar en la gondola" -> "Escribir el codigo" -> 7701362001614
+   Para recompilar el APK despues de cambiar codigo:
+        cd E:\convenia\mobile ; flutter pub get ; flutter build apk --debug
+   Pruebas:   cd E:\convenia\mobile ; flutter test      |    cd E:\convenia\backend ; .\.venv\Scripts\python.exe -m pytest -q
+
+5b) LA APP EN SU CELULAR (Android)  -  IMPORTANTE: NO FUNCIONA SIN EL COMPUTADOR ENCENDIDO
+   La app no tiene servidor propio en internet. Los datos (base de datos), la API y el asistente (n8n)
+   viven en ESTE computador. El celular solo se conecta a el por la red Wi-Fi. Si el computador esta
+   apagado o en otra red, la app abre pero no trae precios (solo muestra lo ya consultado antes).
+   a) Computador y celular en la MISMA red Wi-Fi (o el computador conectado al punto de acceso del celular).
+   b) UNA VEZ, abrir el firewall solo para esos puertos (PowerShell como Administrador):
+        powershell -ExecutionPolicy Bypass -File E:\convenia\docs\hdpt-final\prototipo\permitir_firewall.ps1
+      Y confirmar que la red Wi-Fi este como "Privada" (Configuracion > Red e Internet > Wi-Fi > propiedades).
+   c) Encender todo:  iniciar_demo.ps1   (base de datos + API + n8n)
+   d) Compilar el APK para la red actual (la direccion del computador cambia si cambia de red):
+        powershell -ExecutionPolicy Bypass -File E:\convenia\docs\hdpt-final\prototipo\compilar_apk_celular.ps1
+      Deja Convenia_celular.apk en la carpeta Prototipo. Este APK YA viene compilado para la red "ANDRES DIAZ"
+      (192.168.1.46); en otra red hay que repetir este paso.
+   e) Pasar el APK al celular (cable USB, Drive o WhatsApp), abrirlo e instalar permitiendo "origen desconocido".
+      Aceptar el permiso de camara (escaner) y de ubicacion (tiendas cercanas).
+   f) Abrir la app: busqueda, comparacion, listas, tiendas, "Comparar en la gondola" (camara) y
+      "Preguntar a ConveniaBot" (chat).
+   Prueba rapida desde el navegador del celular:  http://192.168.1.46:8000/docs  (debe abrir la documentacion de la API).
+   Para que funcione SIN el computador habria que alojar la base de datos, la API y n8n en un servidor en la nube
+   (queda como trabajo futuro; ver hoja de ruta del informe).
+
+6) SOLO PARA LA SUSTENTACION
+   - Comparta unicamente las ventanas del emulador y del navegador, no toda la pantalla.
+   - Si algo falla: el prototipo web se abre con doble clic (usa la copia incluida) y las
+     capturas de respaldo estan en Evidencias\.
+
+7) AGENTE n8n (necesita una clave de Gemini PROPIA, gratuita en https://aistudio.google.com/apikey)
+   a) Encender n8n en Docker (la primera vez):
+        docker run -d --name n8n -p 5678:5678 -v n8n_data:/home/node/.n8n n8nio/n8n
+      Las veces siguientes:  docker start n8n
+   b) Importar el agente (la primera vez; el archivo ya trae activo el nodo que consulta la API y el chat publico):
+        docker cp "Prototipo\Convenia_Agente_n8n_Docker.json" n8n:/tmp/flow.json
+        docker exec n8n n8n import:workflow --input=/tmp/flow.json
+      (en Git Bash anteponga MSYS_NO_PATHCONV=1). Tambien sirve Workflows > Import from file.
+   c) Abrir http://localhost:5678, crear su usuario local de n8n y abrir el workflow "ConveniaBot".
+   d) Nodo "Google Gemini Chat Model" > Create new credential > pegar SU clave (Copiar clave en AI Studio) > Guardar.
+      El modelo de los archivos es models/gemini-3.8-flash (gemini-2.0-flash ya fue retirado por Google); si da error, elegir otro modelo "flash" mas reciente.
+   e) La API del computador debe estar encendida (iniciar_demo.ps1): n8n la ve en http://host.docker.internal:8000
+   f) Activar el workflow y probar en "Open chat":  "Hola" | "cuanto cuesta la leche" | "capital de Francia"
+   Nunca guarde la clave dentro de E:\convenia ni la suba a GitHub.
+
+8) REGENERAR EL INFORME / PRESENTACION (solo si quiere cambiar algo)
+   Los scripts estan en E:\convenia\docs\hdpt-final\build\ (Python). Necesitan: python-docx, python-pptx,
+   matplotlib, pillow, lxml, pymupdf  ->  python -m pip install python-docx python-pptx matplotlib pillow lxml pymupdf
+   Orden: figs_final.py -> build_final.py -> (abrir en Word, actualizar campos) ; build_ppt.py ; build_guion.py
+   Si prefiere no regenerar, edite directamente los .docx/.pptx de esta carpeta con Word y PowerPoint.
+
+DATOS QUE NO CAMBIAN
+   - Contrasena local de la base de datos del contenedor: ver .env.example y los comandos de arriba (solo uso local).
+   - La captura diaria de precios ya NO corre: la base queda congelada al 3 de noviembre de 2026.
