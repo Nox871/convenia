@@ -17,4 +17,17 @@ class ApiConfig {
   );
 
   static const Duration requestTimeout = Duration(seconds: 10);
+
+  /// Chat público del agente ConveniaBot (n8n). Dirección del webhook del nodo Chat Trigger.
+  ///
+  ///   flutter build apk --dart-define=ASSISTANT_URL=http://<IP-DEL-PC>:5678/webhook/convenia-chat-webhook/chat
+  ///
+  /// En el emulador, 10.0.2.2 es el computador; en un celular real va la IP del computador en la red.
+  static const String assistantUrl = String.fromEnvironment(
+    'ASSISTANT_URL',
+    defaultValue: 'http://10.0.2.2:5678/webhook/convenia-chat-webhook/chat',
+  );
+
+  /// El agente consulta la API y al modelo de lenguaje: puede tardar más que una consulta normal.
+  static const Duration assistantTimeout = Duration(seconds: 90);
 }

@@ -13,6 +13,8 @@ import '../widgets/convenia_logo.dart';
 import '../widgets/primary_search_field.dart';
 import '../widgets/quick_search_chip.dart';
 import '../widgets/scope_note.dart';
+import 'ar_scan_screen.dart';
+import 'assistant_screen.dart';
 import 'results_screen.dart';
 
 /// Mientras todavía no hay suficientes búsquedas reales (o si no se pueden pedir),
@@ -162,6 +164,36 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 const SizedBox(height: AppSpacing.lg),
                 PrimarySearchField(controller: _searchController, onSubmitted: _search),
+                const SizedBox(height: AppSpacing.md),
+                OutlinedButton.icon(
+                  key: const Key('home_scan_button'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.brandIndigo,
+                    minimumSize: const Size.fromHeight(AppSpacing.buttonHeight),
+                    side: const BorderSide(color: AppColors.brandIndigo),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppSpacing.buttonRadius)),
+                  ),
+                  icon: const Icon(Icons.qr_code_scanner_rounded),
+                  label: const Text('Comparar en la góndola (escanear código)'),
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const ArScanScreen()),
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                OutlinedButton.icon(
+                  key: const Key('home_assistant_button'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.brandIndigo,
+                    minimumSize: const Size.fromHeight(AppSpacing.buttonHeight),
+                    side: const BorderSide(color: AppColors.brandIndigo),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppSpacing.buttonRadius)),
+                  ),
+                  icon: const Icon(Icons.smart_toy_outlined),
+                  label: const Text('Preguntar a ConveniaBot'),
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const AssistantScreen()),
+                  ),
+                ),
                 const SizedBox(height: AppSpacing.xl),
                 const _SectionLabel('BÚSQUEDAS FRECUENTES'),
                 const SizedBox(height: AppSpacing.md),

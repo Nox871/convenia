@@ -50,6 +50,13 @@ class ProductRepository {
     return CompareResponse.fromJson(json);
   }
 
+  /// Comparación a partir del código de barras (lo que lee la cámara).
+  /// La API acepta EAN-8, UPC-12, EAN-13 o GTIN-14 y responde igual que `compareProduct`.
+  Future<CompareResponse> compareByEan(String ean) async {
+    final json = await _client.getJson('/api/v1/products/by-ean/${Uri.encodeComponent(ean)}');
+    return CompareResponse.fromJson(json);
+  }
+
   Future<PriceHistoryResponse> getPriceHistory(
     String productId, {
     int page = 1,
